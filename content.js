@@ -194,16 +194,16 @@
                   style="width:120px"
                 />
               </label>
-              <button class="rv-btn" id="rv-tts-play" title="Play">▶</button>
-              <button class="rv-btn" id="rv-tts-pause" title="Pause">⏸</button>
-              <button class="rv-btn" id="rv-tts-stop" title="Stop">⏹</button>
-              <button class="rv-btn" id="rv-tts-up" title="Prev paragraph">⬆</button>
-              <button class="rv-btn" id="rv-tts-prev" title="Prev sentence">⬅</button>
-              <button class="rv-btn" id="rv-tts-next" title="Next sentence">➡</button>
-              <button class="rv-btn" id="rv-tts-down" title="Next paragraph">⬇</button>
+              <button class="rv-btn" id="rv-tts-play" title="Speak"><img></button>
+              <button class="rv-btn" id="rv-tts-pause" title="Pause"><img></button>
+              <button class="rv-btn" id="rv-tts-stop" title="Stop"><img></button>
+              <button class="rv-btn" id="rv-tts-up" title="Prev paragraph"><img></button>
+              <button class="rv-btn" id="rv-tts-prev" title="Prev sentence"><img></button>
+              <button class="rv-btn" id="rv-tts-next" title="Next sentence"><img></button>
+              <button class="rv-btn" id="rv-tts-down" title="Next paragraph"><img></button>
             </div>
           </div>
-          <label style="opacity:.8;">Reader View</label>
+          <label style="font-size:.9em">Reader View</label>
         </div>
         <div id="rv-content">
           ${title ? `
@@ -337,6 +337,13 @@
     setIcon("rv-font-dec", "text_decrease.png");
     setIcon("rv-width-widen", "widen.png");
     setIcon("rv-width-narrow", "shrink.png");
+    setIcon("rv-tts-play", "speak.png");
+    setIcon("rv-tts-pause", "pause.png");
+    setIcon("rv-tts-stop", "stop.png");
+    setIcon("rv-tts-up", "pprev.png");
+    setIcon("rv-tts-prev", "prev.png");
+    setIcon("rv-tts-next", "next.png");
+    setIcon("rv-tts-down", "nnext.png");
     const contentHost=document.querySelector("#rv-content");
     if (overlay&&contentHost) setupStaticTTSControls(overlay, contentHost);
   }

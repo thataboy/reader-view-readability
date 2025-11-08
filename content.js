@@ -40,6 +40,12 @@
     if (e.altKey && e.key.toLowerCase() === "r") { e.preventDefault(); toggle(); }
   }, true);
 
+  function setIcon(btn_id, file) {
+    const btn = document.getElementById(btn_id)
+    const img = btn && btn.querySelector("img");
+    if (img) img.src = chrome.runtime.getURL(`icons/${file}`);
+  }
+
   // --------------------------
   // UI + overlay
   // --------------------------
@@ -78,8 +84,6 @@
           border: 1px solid var(--rv-border);
           border-radius: 8px;
           padding: 4px 8px;
-          color: inherit;
-          background: transparent;
           cursor: pointer;
 
           /* critical anti-stretch guards */
@@ -88,6 +92,12 @@
           max-width: none !important;
           flex: 0 0 auto !important;
           box-sizing: border-box;
+        }
+        #rv-toolbar .rv-btn img {
+          cursor: pointer;
+          width: 22px; height: 22px;
+          background: black;
+          color: white;
         }
 
         /* Compact cluster for the middle controls */
@@ -160,23 +170,47 @@
         html.rv-active, html.rv-active body {
           overflow: hidden !important;
         }
-
       </style>
       <div id="rv-surface" role="dialog" aria-label="Reader View" tabindex="-1">
-      <div id="rv-toolbar">
-        <button class="rv-btn" id="rv-close">Close</button>
-        <span class="rv-group">
-          <button class="rv-btn" id="rv-font-inc">A+</button>
-          <button class="rv-btn" id="rv-font-dec">a−</button>
-          <button class="rv-btn" id="rv-width-narrow">⇥⇤</button>
-          <button class="rv-btn" id="rv-width-widen">⇤⇥</button>
-        </span>
-        <div class="rv-spacer"></div>
+        <div id="rv-toolbar">
+          <button class="rv-btn" id="rv-close"><img></button>
+          <span class="rv-group">
+            <button class="rv-btn" id="rv-font-inc"><img></button>
+            <button class="rv-btn" id="rv-font-dec"><img></button>
+            <button class="rv-btn" id="rv-width-widen"><img></button>
+            <button class="rv-btn" id="rv-width-narrow"><img></button>
+          </span>
+          <div class="rv-spacer">
+            <div id="rv-tts" style="margin-left:20px;display:flex;gap:6px;align-items:center">
+              <select id="rv-voice" title="Voice"></select>
+              <label class="rv-inline" title="Speed">
+                <input
+                  id="rv-speed"
+                  type="range"
+                  min="0.7"
+                  max="1.5"
+                  step="0.05"
+                  value="1.0"
+                  style="width:120px"
+                />
+              </label>
+              <button class="rv-btn" id="rv-tts-play" title="Play">▶</button>
+              <button class="rv-btn" id="rv-tts-pause" title="Pause">⏸</button>
+              <button class="rv-btn" id="rv-tts-stop" title="Stop">⏹</button>
+              <button class="rv-btn" id="rv-tts-up" title="Prev paragraph">⬆</button>
+              <button class="rv-btn" id="rv-tts-prev" title="Prev sentence">⬅</button>
+              <button class="rv-btn" id="rv-tts-next" title="Next sentence">➡</button>
+              <button class="rv-btn" id="rv-tts-down" title="Next paragraph">⬇</button>
+            </div>
+          </div>
           <label style="opacity:.8;">Reader View</label>
         </div>
         <div id="rv-content">
-          ${title ? `<h1>${title}</h1>` : ""}
-          ${byline ? `<p><em>${byline}</em></p>` : ""}
+          ${title ? `
+          <h1>${title}</h1>
+          ` : ""} ${byline ? `
+          <p><em>${byline}</em></p>
+          ` : ""}
           <div id="rv-article-body">${articleHTML}</div>
         </div>
       </div>
@@ -298,5 +332,87 @@
 
     const overlay = buildOverlay(article.content, article.title, article.byline);
     attachOverlay(overlay, prefs);
+    setIcon("rv-close", "logout.png");
+    setIcon("rv-font-inc", "text_increase.png");
+    setIcon("rv-font-dec", "text_decrease.png");
+    setIcon("rv-width-widen", "widen.png");
+    setIcon("rv-width-narrow", "shrink.png");
+    const contentHost=document.querySelector("#rv-content");
+    if (overlay&&contentHost) setupStaticTTSControls(overlay, contentHost);
   }
 })();
+// ---- TTS state ----
+let ttsState = { prepared:false, manifestId:null, voice:"af_sky", speed:1.0, sentences:[], paraIndexBySentence:[], activeIndex:-1 };
+
+function segmentSentences(rootEl) {
+  const seg = (typeof Intl !== "undefined" && Intl.Segmenter) ? new Intl.Segmenter(undefined, { granularity: "sentence" }) : null;
+  const out = []; const paraMap = [];
+  const paras = Array.from(rootEl.querySelectorAll("p,li,blockquote,h1,h2,h3,h4,h5,h6"));
+  let idx = 0;
+  paras.forEach((el, pIndex) => {
+    const text = (el.innerText || "").trim(); if (!text) return;
+    const sentences = seg ? Array.from(seg.segment(text)).map(s => s.segment.trim()).filter(Boolean)
+                          : text.split(/(?<=[\.\!\?]['"”’\)]*)\s+/).filter(Boolean);
+    sentences.forEach(s => { out.push({ i: idx, text: s, pIndex, el }); paraMap.push(pIndex); idx++; });
+  });
+  return { sentences: out, paraIndexBySentence: paraMap };
+}
+
+
+function setupStaticTTSControls(overlay, contentHost){
+  const voiceSel = overlay.querySelector("#rv-voice");
+  const speedInp = overlay.querySelector("#rv-speed");
+  const btnPlay  = overlay.querySelector("#rv-tts-play");
+  const btnPause = overlay.querySelector("#rv-tts-pause");
+  const btnStop  = overlay.querySelector("#rv-tts-stop");
+  const btnPrev  = overlay.querySelector("#rv-tts-prev");
+  const btnNext  = overlay.querySelector("#rv-tts-next");
+  if (!voiceSel || !speedInp) return;
+  voiceSel.innerHTML = "";
+  const TTS_VOICES = ["af_sky","am_liam","af_alloy","af_aria","am_michael","af_nicole"];
+  TTS_VOICES.forEach(v => { const o=document.createElement("option"); o.value=v; o.textContent=v; voiceSel.appendChild(o); });
+  voiceSel.value = ttsState.voice;
+  voiceSel.onchange = () => { ttsState.voice = voiceSel.value; ttsState.prepared = false; };
+  speedInp.oninput  = () => { ttsState.speed = parseFloat(speedInp.value); ttsState.prepared = false; };
+  function ensurePrepared() {
+    if (ttsState.prepared && ttsState.manifestId) return Promise.resolve(true);
+    const { sentences, paraIndexBySentence } = segmentSentences(contentHost);
+    if (!sentences.length) return Promise.resolve(false);
+    ttsState.sentences = sentences; ttsState.paraIndexBySentence = paraIndexBySentence;
+    return new Promise((res) => {
+      chrome.runtime.sendMessage({
+        type: "tts.prepare",
+        voice: ttsState.voice,
+        speed: ttsState.speed,
+        sentences: sentences.map(s => ({ i: s.i, text: s.text }))
+      }, (resp) => { if (resp && resp.ok) { ttsState.manifestId = resp.manifestId; ttsState.prepared = true; res(true); } else { res(false); } });
+    });
+  }
+  function highlight(i){
+    if (ttsState.activeIndex === i) return;
+    if (ttsState.activeIndex >= 0) {
+      const prev = ttsState.sentences[ttsState.activeIndex];
+      prev?.el?.classList?.remove("rv-tts-active");
+    }
+    ttsState.activeIndex = i;
+    const cur = ttsState.sentences[i];
+    if (cur?.el) { cur.el.classList.add("rv-tts-active"); cur.el.scrollIntoView({ block: "center", behavior: "smooth" }); }
+  }
+  btnPlay.onclick = async () => {
+    const ok = await ensurePrepared();
+    if (!ok) return;
+    const startIndex = Math.max(0, ttsState.activeIndex);
+    chrome.runtime.sendMessage({ type: "tts.play", startIndex });
+  };
+  btnPause.onclick = () => chrome.runtime.sendMessage({ type: "tts.pause" });
+  btnStop.onclick  = () => chrome.runtime.sendMessage({ type: "tts.stop"  });
+  btnPrev.onclick = () => { const idx = Math.max(0, (ttsState.activeIndex >= 0 ? ttsState.activeIndex : 0) - 1); chrome.runtime.sendMessage({ type: "tts.jumpTo", index: idx }); };
+  btnNext.onclick = () => { const idx = Math.min(ttsState.sentences.length - 1, (ttsState.activeIndex >= 0 ? ttsState.activeIndex : -1) + 1); chrome.runtime.sendMessage({ type: "tts.jumpTo", index: idx }); };
+  contentHost.addEventListener("click", (e) => {
+    const p = e.target.closest("p,li,blockquote,h1,h2,h3,h4,h5,h6"); if (!p || !ttsState.sentences.length) return;
+    const found = ttsState.sentences.find(s => s.el === p) || ttsState.sentences.find(s => s.el && s.el.contains(p));
+    if (found) chrome.runtime.sendMessage({ type: "tts.jumpTo", index: found.i });
+  }, true);
+  try { chrome.runtime.onMessage.addListener((msg) => { if (msg?.type === "tts.positionChanged") highlight(msg.payload.index); }); } catch (_){}
+}
+;

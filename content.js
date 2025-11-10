@@ -52,50 +52,50 @@
     console.log(msg);
   }
 
+  function base64ToArrayBuffer(base64) {
+    const binaryString = atob(base64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    // Return the underlying ArrayBuffer
+    return bytes.buffer;
+  }
+
   // Decode Opus ArrayBuffer to AudioBuffer
   async function decodeBuffer(i, arrayBuffer) {
     const k = ttsKey(i);
     if (tts.decoded.has(k)) return tts.decoded.get(k);
-
-    // Double-check we have a real ArrayBuffer
-    if (!arrayBuffer || !(arrayBuffer instanceof ArrayBuffer)) {
-      throw new Error(`decodeBuffer: Invalid ArrayBuffer for segment ${i}`);
-    }
-
     const ctx = ensureCtx();
     const ab = await ctx.decodeAudioData(arrayBuffer.slice(0));
     tts.decoded.set(k, ab);
     return ab;
   }
 
-  // Fetch + decode a segment through background proxy
-async function fetchAndDecodeSegment(i) {
-  try {
-    setStatus(`Loading audio ${i + 1}/${tts.segments.length}...`);
+    // Fetch + decode a segment through background proxy
+  async function fetchAndDecodeSegment(i) {
+    try {
+      setStatus(`Loading audio ${i + 1}/${tts.segments.length}...`);
 
-    const response = await chrome.runtime.sendMessage({
-      type: "tts.fetchSegment",
-      manifestId: tts.manifestId,
-      index: i
-    });
-    console.log("Raw response:", response, response?.constructor?.name);
+      const response = await chrome.runtime.sendMessage({
+        type: "tts.fetchSegment",
+        manifestId: tts.manifestId,
+        index: i
+      });
 
-    // Check if it's an error object
-    if (response && response.error) {
-      throw new Error(response.error);
+      // Check if it's an error object
+      if (response && response.error) {
+        throw new Error(response.error);
+      }
+
+      const buf = base64ToArrayBuffer(response.base64);
+      return await decodeBuffer(i, buf);
+    } catch (err) {
+      setStatus(`Error: ${err.message}`);
+      throw err;
     }
-
-    // Must be an ArrayBuffer
-    if (!(response instanceof ArrayBuffer)) {
-      throw new Error(`Invalid data type: expected ArrayBuffer, got ${typeof response}`);
-    }
-
-    return await decodeBuffer(i, response);
-  } catch (err) {
-    setStatus(`Error: ${err.message}`);
-    throw err;
   }
-}
   // Main playback scheduler
   async function scheduleAt(index) {
     if (!tts.playing || !tts.segments.length) return;

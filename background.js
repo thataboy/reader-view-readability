@@ -17,19 +17,32 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   if (command === "toggle-reader" && tab && tab.id) injectAndToggle(tab.id);
 });
 
+// background.js
+
 const TTS_SERVER = "http://127.0.0.1:9090";
+
+function arrayBufferToBase64(buffer) {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  // The btoa() function creates a Base64-encoded ASCII string
+  return btoa(binary);
+}
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.type) {
     sendResponse({ ok: false, error: "Invalid message" });
-    return; // no async work
+    return; // no async work to keep alive
   }
 
   // Wrap async logic so we can return true below
   (async () => {
     try {
+      // 1) Prepare a batch
       if (msg.type === "tts.prepare") {
-        console.log("sending batch");
         const r = await fetch(`${TTS_SERVER}/synthesize_batch`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -44,27 +57,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
         if (!r.ok) throw new Error(`Server ${r.status}: ${r.statusText}`);
         const j = await r.json();
-        console.log("batch resp", j);
 
         await chrome.storage.session.set({
           [`tts_manifest_${j.manifest_id}`]: JSON.stringify(j)
         });
 
-        console.log("batch stored");
         sendResponse({ ok: true, manifest: j });
         return;
       }
 
+      // 2) Fetch a single audio segment as a raw ArrayBuffer
       if (msg.type === "tts.fetchSegment") {
         const url = `${TTS_SERVER}/audio/${msg.manifestId}/${msg.index}`;
+        console.log(`fetching ${url}`);
         const r = await fetch(url, { cache: "no-store" });
-        if (!r.ok) throw new Error(`Segment ${msg.index}: ${r.status}`);
+        console.log(`fetching response ${r.ok}`);
+        if (!r.ok) throw new Error(`Segment ${msg.index}: ${r.status} ${r.statusText}`);
         const buf = await r.arrayBuffer();
-        // Send the raw ArrayBuffer back to the content script
-        sendResponse(buf);
+        const b64 = arrayBufferToBase64(buf);
+        console.log('b64', b64);
+        sendResponse({base64: b64});
         return;
       }
 
+      // 3) No-op controls
       if (["tts.play", "tts.pause", "tts.stop", "tts.jumpTo"].includes(msg.type)) {
         sendResponse({ ok: true });
         return;
@@ -74,10 +90,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     } catch (err) {
       console.error("TTS error:", err);
       // For segment fetches, the content side expects either ArrayBuffer or {error}
-      sendResponse({ ok: false, error: String(err && err.message || err) });
+      sendResponse({ error: String(err?.message || err) });
     }
   })();
 
-  // Keep the service worker alive until sendResponse is called
+  // IMPORTANT: keep the service worker alive for the async work above
   return true;
 });

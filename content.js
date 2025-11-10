@@ -49,6 +49,7 @@
   // Show status message to user
   function setStatus(msg) {
     if (tts.statusEl) tts.statusEl.textContent = msg;
+    console.log(msg);
   }
 
   // Decode Opus ArrayBuffer to AudioBuffer
@@ -512,7 +513,7 @@ async function fetchAndDecodeSegment(i) {
         new Intl.Segmenter(undefined, { granularity: "sentence" }) : null;
       const out = []; const paraMap = [];
       const paras = Array.from(
-        rootEl.querySelector('#rv-article-body article')
+        rootEl.querySelector('#rv-article-body')
           .querySelectorAll(':is(p, blockquote, li, h1, h2, h3, h4, h5, h6):not(dialog *):not(header *):not(footer *):not(figure *)')
       );
       let idx = 0;
@@ -526,44 +527,48 @@ async function fetchAndDecodeSegment(i) {
           idx++;
         });
       });
-      // console.log(out); console.log(paraMap);
       return { sentences: out, paraIndexBySentence: paraMap };
     }
 
     // Prepare synthesis
-async function ensurePrepared() {
-  if (ttsUIState.prepared && ttsUIState.manifest) return true;
+    async function ensurePrepared() {
+      if (ttsUIState.prepared && ttsUIState.manifest) return true;
 
-  setStatus("Preparing speech...");
-  const { sentences } = segmentSentences(contentHost);
-  if (!sentences.length) { setStatus("No text to speak"); return false; }
+      setStatus("Preparing speech...");
+      const { sentences } = segmentSentences(contentHost);
+      if (!sentences.length) { setStatus("No text to speak"); return false; }
 
-  try {
-    const manifest = await chrome.runtime.sendMessage({
-      type: "tts.prepare",
-      voice: ttsUIState.voice,
-      speed: ttsUIState.speed,
-      sentences: sentences.map(s => ({ i: s.i, text: s.text }))
-    });
-    console.log("manifest", manifest);
+      try {
+        const resp = await chrome.runtime.sendMessage({
+          type: "tts.prepare",
+          voice: ttsUIState.voice,
+          speed: ttsUIState.speed,
+          sentences: sentences.map(s => ({ i: s.i, text: s.text }))
+        });
 
-    if (manifest.error) throw new Error(manifest.error);
-    if (!manifest.ok) throw new Error("Preparation failed");
-    console.log("manifest ok");
+        if (!resp) {
+          throw new Error("response null");
+        }
 
-    tts.manifestId = manifest.manifest.manifest_id;
-    tts.segments = manifest.manifest.segments;
-    ttsUIState.manifest = manifest.manifest;
-    ttsUIState.prepared = true;
-    tts.index = 0;
-    setStatus(`Ready (${tts.segments.length} segments)`);
-    return true;
-  } catch (err) {
-    console.error("Prepare error:", err);
-    setStatus(`Prep failed: ${err.message}`);
-    return false;
-  }
-}
+        // Check for errors in response
+        if (!resp.ok) {
+          throw new Error(resp.error || "Unknown error");
+        }
+
+        tts.manifestId = resp.manifest.manifest_id;
+        tts.segments = resp.manifest.segments;
+        ttsUIState.manifest = resp.manifest;
+        ttsUIState.prepared = true;
+        tts.index = 0;
+        setStatus(`Ready (${tts.segments.length} segments)`);
+        return true;
+      } catch (err) {
+        console.error("Prepare error:", err);
+        setStatus(`Prepare failed: ${err.message}`);
+        return false;
+      }
+    }
+
     // Highlight current sentence
     function highlight(i) {
       const prev = document.querySelector(".rv-tts-active");

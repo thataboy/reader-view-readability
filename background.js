@@ -17,16 +17,19 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   if (command === "toggle-reader" && tab && tab.id) injectAndToggle(tab.id);
 });
 
-// ----- TTS Proxy Server (simplified) -----
 const TTS_SERVER = "http://127.0.0.1:9090";
 
-chrome.runtime.onMessage.addListener((msg, sender) => {
-  return (async () => {
-    if (!msg || !msg.type) return { ok: false, error: "Invalid message" };
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || !msg.type) {
+    sendResponse({ ok: false, error: "Invalid message" });
+    return; // no async work
+  }
 
-    if (msg.type === "tts.prepare") {
-      console.log("sentences", msg.sentences);
-      try {
+  // Wrap async logic so we can return true below
+  (async () => {
+    try {
+      if (msg.type === "tts.prepare") {
+        console.log("sending batch");
         const r = await fetch(`${TTS_SERVER}/synthesize_batch`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -41,36 +44,40 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
         });
         if (!r.ok) throw new Error(`Server ${r.status}: ${r.statusText}`);
         const j = await r.json();
+        console.log("batch resp", j);
+
         await chrome.storage.session.set({
           [`tts_manifest_${j.manifest_id}`]: JSON.stringify(j)
         });
-        return { ok: true, manifest: j };
-      } catch (err) {
-        console.error("TTS prepare error:", err);
-        return { ok: false, error: err.message };
-      }
-    }
 
-    if (msg.type === "tts.fetchSegment") {
-      try {
-        const { manifestId, index } = msg;
-        const url = `${TTS_SERVER}/audio/${manifestId}/${index}`;
+        console.log("batch stored");
+        sendResponse({ ok: true, manifest: j });
+        return;
+      }
+
+      if (msg.type === "tts.fetchSegment") {
+        const url = `${TTS_SERVER}/audio/${msg.manifestId}/${msg.index}`;
         const r = await fetch(url, { cache: "no-store" });
-        if (!r.ok) throw new Error(`Segment ${index}: ${r.status}`);
-        // Return ArrayBuffer directly - this is key for proper transfer
-        return await r.arrayBuffer();
-      } catch (err) {
-        console.error("TTS fetch error:", err);
-        return { error: err.message };
+        if (!r.ok) throw new Error(`Segment ${msg.index}: ${r.status}`);
+        const buf = await r.arrayBuffer();
+        // Send the raw ArrayBuffer back to the content script
+        sendResponse(buf);
+        return;
       }
-    }
 
-    // Acknowledge control messages
-    if (["tts.play", "tts.pause", "tts.stop", "tts.jumpTo"].includes(msg.type)) {
-      return { ok: true };
-    }
+      if (["tts.play", "tts.pause", "tts.stop", "tts.jumpTo"].includes(msg.type)) {
+        sendResponse({ ok: true });
+        return;
+      }
 
-    return { ok: false, error: "Unknown message type" };
+      sendResponse({ ok: false, error: "Unknown message type" });
+    } catch (err) {
+      console.error("TTS error:", err);
+      // For segment fetches, the content side expects either ArrayBuffer or {error}
+      sendResponse({ ok: false, error: String(err && err.message || err) });
+    }
   })();
-  // Note: No need for return true when returning a Promise
+
+  // Keep the service worker alive until sendResponse is called
+  return true;
 });

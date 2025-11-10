@@ -20,12 +20,12 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 // ----- TTS Proxy Server (simplified) -----
 const TTS_SERVER = "http://127.0.0.1:9090";
 
-chrome.runtime.onMessage.addListener((msg, sender, respond) => {
-  (async () => {
-    if (!msg || !msg.type) return;
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  return (async () => {
+    if (!msg || !msg.type) return { ok: false, error: "Invalid message" };
 
-    // Prepare: send sentences to server, get manifest
     if (msg.type === "tts.prepare") {
+      console.log("sentences", msg.sentences);
       try {
         const r = await fetch(`${TTS_SERVER}/synthesize_batch`, {
           method: "POST",
@@ -41,42 +41,36 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         });
         if (!r.ok) throw new Error(`Server ${r.status}: ${r.statusText}`);
         const j = await r.json();
-
-        // Store manifest in session storage so it survives SW restart
         await chrome.storage.session.set({
           [`tts_manifest_${j.manifest_id}`]: JSON.stringify(j)
         });
-
-        respond({ ok: true, manifest: j });
+        return { ok: true, manifest: j };
       } catch (err) {
         console.error("TTS prepare error:", err);
-        respond({ ok: false, error: err.message });
+        return { ok: false, error: err.message };
       }
-      return;
     }
 
-    // Fetch single audio segment as ArrayBuffer
     if (msg.type === "tts.fetchSegment") {
       try {
         const { manifestId, index } = msg;
         const url = `${TTS_SERVER}/audio/${manifestId}/${index}`;
         const r = await fetch(url, { cache: "no-store" });
         if (!r.ok) throw new Error(`Segment ${index}: ${r.status}`);
-        const buf = await r.arrayBuffer();
-        // Send ArrayBuffer directly, not wrapped in an object
-        respond(buf);
+        // Return ArrayBuffer directly - this is key for proper transfer
+        return await r.arrayBuffer();
       } catch (err) {
         console.error("TTS fetch error:", err);
-        respond({ error: err.message });
+        return { error: err.message };
       }
-      return;
     }
 
-    // Control messages - content script handles these
+    // Acknowledge control messages
     if (["tts.play", "tts.pause", "tts.stop", "tts.jumpTo"].includes(msg.type)) {
-      respond({ ok: true });
-      return;
+      return { ok: true };
     }
+
+    return { ok: false, error: "Unknown message type" };
   })();
-  return true; // keep channel open for async response
+  // Note: No need for return true when returning a Promise
 });

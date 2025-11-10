@@ -68,32 +68,33 @@
   }
 
   // Fetch + decode a segment through background proxy
-  async function fetchAndDecodeSegment(i) {
-    try {
-      setStatus(`Loading audio ${i + 1}/${tts.segments.length}...`);
+async function fetchAndDecodeSegment(i) {
+  try {
+    setStatus(`Loading audio ${i + 1}/${tts.segments.length}...`);
 
-      const response = await chrome.runtime.sendMessage({
-        type: "tts.fetchSegment",
-        manifestId: tts.manifestId,
-        index: i
-      });
+    const response = await chrome.runtime.sendMessage({
+      type: "tts.fetchSegment",
+      manifestId: tts.manifestId,
+      index: i
+    });
+    console.log("Raw response:", response, response?.constructor?.name);
 
-      // Check if it's an error object
-      if (response && response.error) {
-        throw new Error(response.error);
-      }
-
-      // Must be an ArrayBuffer
-      if (!(response instanceof ArrayBuffer)) {
-        throw new Error(`Invalid data type: expected ArrayBuffer, got ${typeof response}`);
-      }
-
-      return await decodeBuffer(i, response);
-    } catch (err) {
-      setStatus(`Error: ${err.message}`);
-      throw err;
+    // Check if it's an error object
+    if (response && response.error) {
+      throw new Error(response.error);
     }
+
+    // Must be an ArrayBuffer
+    if (!(response instanceof ArrayBuffer)) {
+      throw new Error(`Invalid data type: expected ArrayBuffer, got ${typeof response}`);
+    }
+
+    return await decodeBuffer(i, response);
+  } catch (err) {
+    setStatus(`Error: ${err.message}`);
+    throw err;
   }
+}
   // Main playback scheduler
   async function scheduleAt(index) {
     if (!tts.playing || !tts.segments.length) return;
@@ -290,11 +291,15 @@
           background: rgba(255, 255, 0, 0.2) !important;
           transition: background 0.3s ease;
         }
-        #rv-tts-status {
+        #rv-tts-status, #rv-speed-label {
           font-size: 12px;
           color: var(--rv-fg);
           opacity: 0.9;
           margin-left: 8px;
+        }
+        #rv-speed-label {
+          width: 3em;
+          margin: 0 2px 0 4px;
         }
       </style>
       <div id="rv-surface" role="dialog" aria-label="Reader View" tabindex="-1">
@@ -312,6 +317,7 @@
               <label class="rv-inline" title="Speed">
                 <input id="rv-speed" type="range" min="0.7" max="1.5" step="0.05" value="1.0" style="width:120px" />
               </label>
+              <span id="rv-speed-label"></span>
               <button class="rv-btn" id="rv-tts-play" title="Play"><img></button>
               <button class="rv-btn" id="rv-tts-pause" title="Pause"><img></button>
               <button class="rv-btn" id="rv-tts-stop" title="Stop"><img></button>
@@ -473,6 +479,7 @@
   function setupStaticTTSControls(overlay, contentHost) {
     const voiceSel = overlay.querySelector("#rv-voice");
     const speedInp = overlay.querySelector("#rv-speed");
+    const speedLabel = overlay.querySelector("#rv-speed-label");
     const btnPlay = overlay.querySelector("#rv-tts-play");
     const btnPause = overlay.querySelector("#rv-tts-pause");
     const btnStop = overlay.querySelector("#rv-tts-stop");
@@ -489,10 +496,15 @@
     });
     voiceSel.value = ttsUIState.voice;
     speedInp.value = ttsUIState.speed;
+    speedLabel.textContent = `${speedInp.value}x`;
 
     // State changes invalidate preparation
     voiceSel.onchange = () => { ttsUIState.voice = voiceSel.value; ttsUIState.prepared = false; };
-    speedInp.oninput = () => { ttsUIState.speed = parseFloat(speedInp.value); ttsUIState.prepared = false; };
+    speedInp.oninput = () => {
+      ttsUIState.speed = parseFloat(speedInp.value);
+      speedLabel.textContent = `${speedInp.value}x`;
+      ttsUIState.prepared = false;
+    };
 
     // Segment sentences from article
     function segmentSentences(rootEl) {
@@ -519,41 +531,39 @@
     }
 
     // Prepare synthesis
-    async function ensurePrepared() {
-      if (ttsUIState.prepared && ttsUIState.manifest) return true;
+async function ensurePrepared() {
+  if (ttsUIState.prepared && ttsUIState.manifest) return true;
 
-      setStatus("Preparing speech...");
-      const { sentences } = segmentSentences(contentHost);
-      if (!sentences.length) { setStatus("No text to speak"); return false; }
+  setStatus("Preparing speech...");
+  const { sentences } = segmentSentences(contentHost);
+  if (!sentences.length) { setStatus("No text to speak"); return false; }
 
-      try {
-        const manifest = await new Promise((resolve, reject) => {
-          chrome.runtime.sendMessage({
-            type: "tts.prepare",
-            voice: ttsUIState.voice,
-            speed: ttsUIState.speed,
-            sentences: sentences.map(s => ({ i: s.i, text: s.text }))
-          }, (resp) => {
-            if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-            else if (!resp.ok) reject(new Error(resp.error));
-            else resolve(resp.manifest);
-          });
-        });
+  try {
+    const manifest = await chrome.runtime.sendMessage({
+      type: "tts.prepare",
+      voice: ttsUIState.voice,
+      speed: ttsUIState.speed,
+      sentences: sentences.map(s => ({ i: s.i, text: s.text }))
+    });
+    console.log("manifest", manifest);
 
-        tts.manifestId = manifest.manifest_id;
-        tts.segments = manifest.segments;
-        ttsUIState.manifest = manifest;
-        ttsUIState.prepared = true;
-        tts.index = 0;
-        setStatus(`Ready (${tts.segments.length} segments)`);
-        return true;
-      } catch (err) {
-        console.error("Prepare error:", err);
-        setStatus(`Prep failed: ${err.message}`);
-        return false;
-      }
-    }
+    if (manifest.error) throw new Error(manifest.error);
+    if (!manifest.ok) throw new Error("Preparation failed");
+    console.log("manifest ok");
 
+    tts.manifestId = manifest.manifest.manifest_id;
+    tts.segments = manifest.manifest.segments;
+    ttsUIState.manifest = manifest.manifest;
+    ttsUIState.prepared = true;
+    tts.index = 0;
+    setStatus(`Ready (${tts.segments.length} segments)`);
+    return true;
+  } catch (err) {
+    console.error("Prepare error:", err);
+    setStatus(`Prep failed: ${err.message}`);
+    return false;
+  }
+}
     // Highlight current sentence
     function highlight(i) {
       const prev = document.querySelector(".rv-tts-active");

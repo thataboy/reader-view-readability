@@ -34,6 +34,9 @@
     index: 0,
     playing: false,
     decoded: new Map(),
+    inFlight: new Set(),
+    currentSrc: null,
+    playToken: 0,
     prefetchAhead: 3,
     keepBehind: 1,
     statusEl: null,
@@ -107,16 +110,22 @@
     return ab;
   }
 
-    // Fetch + decode a segment through background proxy
+  // Fetch + decode a segment through background proxy
   async function fetchAndDecodeSegment(i) {
     try {
+      // If already decoded, return it
+      const k = ttsKey(i);
+      if (tts.decoded.has(k)) return tts.decoded.get(k);
+      // If a fetch for this index is already running, let that one finish
+      if (tts.inFlight.has(i)) {
+        // Busy-wait with micro-pauses until decoded is populated or inFlight clears
+        while (tts.inFlight.has(i) && !tts.decoded.has(k)) {
+          await new Promise(r => setTimeout(r, 10));
+        }
+        if (tts.decoded.has(k)) return tts.decoded.get(k);
+      }
+      tts.inFlight.add(i);
       setStatus(`Loading audio ${i + 1}/${tts.segments.length}...`);
-
-      // const response = await chrome.runtime.sendMessage({
-      //   type: "tts.fetchSegment",
-      //   manifestId: tts.manifestId,
-      //   index: i
-      // });
       const response = await chrome.runtime.sendMessage({
         type: "tts.synthesizeOne",
         payload: {
@@ -131,10 +140,13 @@
 
       if (!response?.ok) throw new Error(response?.error || "Synthesis failed");
       const buf = base64ToArrayBuffer(response.base64);
-      return await decodeBuffer(i, buf);
+      const ab = await decodeBuffer(i, buf);
+      return ab;
     } catch (err) {
       setStatus(`Error: ${err.message}`);
       throw err;
+    } finally {
+      tts.inFlight.delete(i);
     }
   }
   // Main playback scheduler
@@ -150,11 +162,28 @@
     }
 
     try {
-      const cur = await fetchAndDecodeSegment(index);
-      const src = ctx.createBufferSource();
+      const token = ++tts.playToken;
+      const curP = fetchAndDecodeSegment(index);     // start fetch/decode
+      const src = ctx.createBufferSource();          // create node early
+      tts.currentSrc = src;
+
+      // Attach onended BEFORE any await so we never miss it
+      src.onended = () => {
+        if (!tts.playing || token !== tts.playToken) return;
+        tts.currentSrc = null;
+        const next = index + 1;
+        if (next < tts.segments.length) scheduleAt(next);
+        else {
+          tts.playing = false;
+          setStatus("Finished");
+          chrome.runtime.sendMessage({ type: "tts.stateChanged", payload: "stopped" });
+        }
+      };
+
+      // Now await audio, set buffer, and start
+      const cur = await curP;
       src.buffer = cur;
       src.connect(ctx.destination);
-
       const t0 = ctx.currentTime + 0.12;
       src.start(t0);
       tts.playing = true;
@@ -165,31 +194,26 @@
         payload: { index }
       });
 
-      // Prefetch ahead + clean behind
-      const start = Math.max(0, index - tts.keepBehind);
-      const end = Math.min(tts.segments.length - 1, index + tts.prefetchAhead);
-      const fetches = [];
-      for (let i = start; i <= end; i++) {
-        fetches.push(fetchAndDecodeSegment(i).catch(() => {}));
-      }
-      await Promise.all(fetches);
-
-      // Cleanup old decoded buffers
-      for (const k of Array.from(tts.decoded.keys())) {
-        const idx = parseInt(k.split(":")[1], 10);
-        if (idx < index - tts.keepBehind - 2) tts.decoded.delete(k);
-      }
-
-      src.onended = () => {
-        if (!tts.playing) return;
-        const next = index + 1;
-        if (next < tts.segments.length) scheduleAt(next);
-        else {
-          tts.playing = false;
-          setStatus("Finished");
-          chrome.runtime.sendMessage({ type: "tts.stateChanged", payload: "stopped" });
+      // Prefetch without blocking the onended attachment/playback
+      (async () => {
+        const start = Math.max(0, index + 1);
+        const end = Math.min(tts.segments.length - 1, index + tts.prefetchAhead);
+        const fetches = [];
+        for (let i = start; i <= end; i++) {
+          if (!tts.decoded.has(ttsKey(i)) && !tts.inFlight.has(i)) {
+            fetches.push(fetchAndDecodeSegment(i).catch(() => {}));
+          }
         }
-      };
+        await Promise.all(fetches);
+        // Cleanup only far-behind buffers
+        for (const k of Array.from(tts.decoded.keys())) {
+          const idx = parseInt(k.split(":")[1], 10);
+          if (Number.isFinite(idx) && idx < index - (tts.keepBehind + 3)) {
+            tts.decoded.delete(k);
+          }
+        }
+      })().catch(() => {});
+
     } catch (err) {
       console.error("Playback error:", err);
       setStatus(`Playback failed: ${err.message}`);

@@ -30,6 +30,7 @@
     audioCtx: null,
     manifestId: null,
     segments: [],
+    texts: [],
     index: 0,
     playing: false,
     decoded: new Map(),
@@ -37,8 +38,41 @@
     keepBehind: 1,
     statusEl: null,
   };
+  // Voice list
+  const TTS_VOICES = [
+    "af_heart",
+    "af_alloy",
+    "af_aoede",
+    "af_bella",
+    "af_jessica",
+    "af_kore",
+    "af_nicole",
+    "af_nova",
+    "af_river",
+    "af_sarah",
+    "af_sky",
+    "am_adam",
+    "am_echo",
+    "am_eric",
+    "am_fenrir",
+    "am_liam",
+    "am_michael",
+    "am_onyx",
+    "am_puck",
+    "am_santa",
+    "bf_alice",
+    "bf_emma",
+    "bf_isabella",
+    "bf_lily",
+    "bm_daniel",
+    "bm_fable",
+    "bm_george",
+    "bm_lewis",
+    "ff_siwis"
+  ];
 
-  function ttsKey(i){ return `${tts.manifestId}:${i}`; }
+  function ttsKey(i){ return `seg:${i}`; }
+  // function ttsKey(i){ return `${tts.manifestId}:${i}`; }
   function ensureCtx() {
     if (!tts.audioCtx || tts.audioCtx.state === "closed") {
       tts.audioCtx = new (AudioContext || webkitAudioContext)({ sampleRate: 24000 });
@@ -78,17 +112,24 @@
     try {
       setStatus(`Loading audio ${i + 1}/${tts.segments.length}...`);
 
+      // const response = await chrome.runtime.sendMessage({
+      //   type: "tts.fetchSegment",
+      //   manifestId: tts.manifestId,
+      //   index: i
+      // });
       const response = await chrome.runtime.sendMessage({
-        type: "tts.fetchSegment",
-        manifestId: tts.manifestId,
-        index: i
+        type: "tts.synthesizeOne",
+        payload: {
+          text: tts.texts[i],
+          voice: ttsUIState.voice,
+          speed: ttsUIState.speed,
+          sample_rate: 24000,
+          bitrate: 24000,
+          vbr: "constrained",
+        }
       });
 
-      // Check if it's an error object
-      if (response && response.error) {
-        throw new Error(response.error);
-      }
-
+      if (!response?.ok) throw new Error(response?.error || "Synthesis failed");
       const buf = base64ToArrayBuffer(response.base64);
       return await decodeBuffer(i, buf);
     } catch (err) {
@@ -475,7 +516,7 @@
   // --------------------------
   // TTS Controls
   // --------------------------
-  let ttsUIState = { prepared: false, manifest: null, voice: "af_sky", speed: 1.0 };
+  let ttsUIState = { prepared: false, manifest: null, voice: "am_liam", speed: 1.0 };
 
   function setupStaticTTSControls(overlay, contentHost) {
     const voiceSel = overlay.querySelector("#rv-voice");
@@ -487,9 +528,6 @@
     const btnPrev = overlay.querySelector("#rv-tts-prev");
     const btnNext = overlay.querySelector("#rv-tts-next");
     if (!voiceSel || !speedInp) return;
-
-    // Voice list
-    const TTS_VOICES = ["af_sky","am_liam","af_alloy","af_aria","am_michael","af_nicole"];
     voiceSel.innerHTML = "";
     TTS_VOICES.forEach(v => {
       const o = document.createElement("option"); o.value = v; o.textContent = v;
@@ -514,7 +552,7 @@
       const out = []; const paraMap = [];
       const paras = Array.from(
         rootEl.querySelector('#rv-article-body')
-          .querySelectorAll(':is(p, blockquote, li, h1, h2, h3, h4, h5, h6):not(dialog *):not(header *):not(footer *):not(figure *)')
+          .querySelectorAll(':is(p, blockquote, li, h1, h2, h3, h4, h5, h6, div):not(dialog *):not(header *):not(footer *):not(figure *)')
       );
       let idx = 0;
       paras.forEach((el, pIndex) => {
@@ -532,43 +570,19 @@
 
     // Prepare synthesis
     async function ensurePrepared() {
-      if (ttsUIState.prepared && ttsUIState.manifest) return true;
-
+      if (ttsUIState.prepared && tts.segments?.length) return true;
       setStatus("Preparing speech...");
       const { sentences } = segmentSentences(contentHost);
       if (!sentences.length) { setStatus("No text to speak"); return false; }
-
-      try {
-        const resp = await chrome.runtime.sendMessage({
-          type: "tts.prepare",
-          voice: ttsUIState.voice,
-          speed: ttsUIState.speed,
-          sentences: sentences.map(s => ({ i: s.i, text: s.text }))
-        });
-
-        if (!resp) {
-          throw new Error("response null");
-        }
-
-        // Check for errors in response
-        if (!resp.ok) {
-          throw new Error(resp.error || "Unknown error");
-        }
-
-        tts.manifestId = resp.manifest.manifest_id;
-        tts.segments = resp.manifest.segments;
-        ttsUIState.manifest = resp.manifest;
-        ttsUIState.prepared = true;
-        tts.index = 0;
-        setStatus(`Ready (${tts.segments.length} segments)`);
-        return true;
-      } catch (err) {
-        console.error("Prepare error:", err);
-        setStatus(`Prepare failed: ${err.message}`);
-        return false;
-      }
+      tts.texts = sentences.map(s => s.text);
+      tts.segments = new Array(tts.texts.length).fill(0); // we only need the count
+      tts.manifestId = null;
+      ttsUIState.manifest = null;
+      ttsUIState.prepared = true;
+      tts.index = 0;
+      setStatus(`Ready (${tts.segments.length} segments)`);
+      return true;
     }
-
     // Highlight current sentence
     function highlight(i) {
       const prev = document.querySelector(".rv-tts-active");

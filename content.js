@@ -7,7 +7,7 @@
   // Storage helpers
   // --------------------------
   const STORAGE_KEY = "rv_prefs_v1";
-  const defaults = { fontSize: 17, maxWidth: 860 };
+  const defaults = { fontSize: 17, maxWidth: 860, voice: '', speed: 1.0 };
   async function loadPrefs() {
     try {
       const out = await chrome.storage.local.get(STORAGE_KEY);
@@ -192,7 +192,7 @@
     }
   }
 
-  function stopPlayback(state = "stopped") {
+  function stopPlayback() {
     // stop the current source, don’t close the context
     try {
       if (tts.currentSrc) {
@@ -203,11 +203,7 @@
     tts.currentSrc = null;
     tts.playing = false;
 
-    // optional: suspend on pause to save CPU
-    if (state === "paused" && tts.audioCtx?.state === "running") {
-      tts.audioCtx.suspend().catch(()=>{});
-    }
-    setStatus(state === "stopped" ? "Ready" : "Paused");
+    setStatus("Ready");
   }
 
   // --------------------------
@@ -455,7 +451,6 @@
               </label>
               <span id="rv-speed-label"></span>
               <button class="rv-btn" id="rv-tts-play" title="Play"><img></button>
-              <button class="rv-btn" id="rv-tts-pause" title="Pause"><img></button>
               <button class="rv-btn" id="rv-tts-stop" title="Stop"><img></button>
               <button class="rv-btn" id="rv-tts-prevp" title="Previous paragraph"><img></button>
               <button class="rv-btn" id="rv-tts-prev" title="Previous sentence"><img></button>
@@ -573,7 +568,7 @@
     surface.focus();
 
     // Setup TTS controls
-    setupStaticTTSControls(container, contentHost);
+    setupStaticTTSControls(container, contentHost, prefs);
   }
 
   // --------------------------
@@ -602,8 +597,7 @@
     setIcon("rv-font-dec", "text_decrease.png");
     setIcon("rv-width-widen", "widen.png");
     setIcon("rv-width-narrow", "shrink.png");
-    setIcon("rv-tts-play", "speak.png");
-    setIcon("rv-tts-pause", "pause.png");
+    setIcon("rv-tts-play", "play.png");
     setIcon("rv-tts-stop", "stop.png");
     setIcon("rv-tts-prev", "prev.png");
     setIcon("rv-tts-prevp", "pprev.png");
@@ -617,12 +611,11 @@
   // --------------------------
   let ttsUIState = { prepared: false, voice: "", speed: 1.0 };
 
-  function setupStaticTTSControls(overlay, contentHost) {
+  function setupStaticTTSControls(overlay, contentHost, prefs) {
     const voiceSel = overlay.querySelector("#rv-voice");
     const speedInp = overlay.querySelector("#rv-speed");
     const speedLabel = overlay.querySelector("#rv-speed-label");
     const btnPlay = overlay.querySelector("#rv-tts-play");
-    const btnPause = overlay.querySelector("#rv-tts-pause");
     const btnStop = overlay.querySelector("#rv-tts-stop");
     const btnPrev = overlay.querySelector("#rv-tts-prev");
     const btnNext = overlay.querySelector("#rv-tts-next");
@@ -639,7 +632,7 @@
         if (!res?.ok) throw new Error(res?.error || "voices fetch failed");
         voices = res.voices;
       } finally {
-        const current = ttsUIState.voice;
+        const current = prefs.voice;
         selectEl.innerHTML = "";
         voices ||= fallback;
         for (const v of voices) {
@@ -649,20 +642,22 @@
           selectEl.appendChild(opt);
         }
         // If current is available, keep it; otherwise use first
-        const hasCurrent = voices.some(v => v === current);
-        selectEl.value = hasCurrent ? current : (voices[0] || "");
+        const currentAvail = voices.some(v => v === current);
+        selectEl.value = currentAvail ? current : (voices[0] || "");
         ttsUIState.voice = selectEl.value;
       }
     }
 
     loadVoicesInto(voiceSel);
 
-    speedInp.value = ttsUIState.speed;
+    speedInp.value = prefs.speed;
     speedLabel.textContent = `${speedInp.value}x`;
 
     voiceSel.addEventListener("change", () => {
       if (ttsUIState.voice !== voiceSel.value) {
         ttsUIState.voice = voiceSel.value;
+        prefs.voice = voiceSel.value;
+        savePrefs(prefs);
         invalidateAudio();
       }
     });
@@ -672,6 +667,8 @@
       if (ttsUIState.speed !== newSpeed) {
         ttsUIState.speed = newSpeed;
         speedLabel.textContent = `${speedInp.value}x`;
+        prefs.speed = newSpeed;
+        savePrefs(prefs);
         invalidateAudio();
       }
     });
@@ -792,7 +789,6 @@
       playAt(startIndex);
     };
 
-    btnPause.onclick = () => { stopPlayback("paused"); };
     btnStop.onclick = () => { stopPlayback(); };
 
     function paragraphStartIndexAt(idx) {

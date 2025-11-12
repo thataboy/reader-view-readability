@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Readability",
-  "version": "1.3.0",
-  "description": "Clean reader view using Mozilla Readability only.",
+  "name": "Readability + Kokoro",
+  "version": "1.0.0",
+  "description": "Xibi's reader view using readability.js + Kokoro TTS",
   "permissions": [
     "activeTab",
     "scripting",

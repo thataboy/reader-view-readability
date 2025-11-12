@@ -35,9 +35,11 @@
     inFlight: new Set(),
     currentSrc: null,
     playToken: 0,
-    prefetchAhead: 4,
+    prefetchAhead: 4,    // # TTS segments to prefetch
     keepBehind: 1,
-    statusEl: null,
+    statusEl: null,      // status label
+    btnPlay: null,
+    controls: null,      // buttons other than Play
     meta: [],            // [{el,start,end}] parallel to tts.texts[index]
     highlightSpan: null, // active <span> wrapper for current sentence
   };
@@ -53,7 +55,7 @@
   // Show status message to user
   function setStatus(msg) {
     if (tts.statusEl) tts.statusEl.textContent = msg;
-    console.log(msg);
+    // console.log(msg);
   }
 
   function base64ToArrayBuffer(base64) {
@@ -92,7 +94,7 @@
         if (tts.decoded.has(k)) return tts.decoded.get(k);
       }
       tts.inFlight.add(i);
-      console.log(`Converting ${i + 1}/${tts.segments.length}...`);
+      // console.log(`Converting ${i + 1}/${tts.segments.length}...`);
       const response = await chrome.runtime.sendMessage({
         type: "tts.synthesize",
         payload: {
@@ -145,7 +147,7 @@
         const next = index + 1;
         if (next < tts.segments.length) scheduleAt(next);
         else {
-          tts.playing = false;
+          stopPlayback();
           setStatus("Finished");
           chrome.runtime.sendMessage({ type: "tts.stateChanged", payload: "stopped" });
         }
@@ -202,7 +204,8 @@
     } catch {}
     tts.currentSrc = null;
     tts.playing = false;
-
+    tts.btnPlay.style.setProperty('display', 'inline');
+    tts.controls.style.setProperty('display', 'none');
     setStatus("Ready");
   }
 
@@ -451,11 +454,13 @@
               </label>
               <span id="rv-speed-label"></span>
               <button class="rv-btn" id="rv-tts-play" title="Play"><img></button>
+              <div id="rv-tts-controls" style="display:none">
               <button class="rv-btn" id="rv-tts-stop" title="Stop"><img></button>
               <button class="rv-btn" id="rv-tts-prevp" title="Previous paragraph"><img></button>
               <button class="rv-btn" id="rv-tts-prev" title="Previous sentence"><img></button>
               <button class="rv-btn" id="rv-tts-next" title="Next sentence"><img></button>
               <button class="rv-btn" id="rv-tts-nextp" title="Next paragraph"><img></button>
+              </div>
               <span id="rv-tts-status"></span>
             </div>
           </div>
@@ -483,6 +488,8 @@
 
     // save status element
     tts.statusEl = container.querySelector("#rv-tts-status");
+    tts.btnPlay = container.querySelector("#rv-tts-play");
+    tts.controls = container.querySelector("#rv-tts-controls");
     setStatus("Ready");
 
     const outside = Array.from(document.body.children).filter(n => n !== container);
@@ -603,8 +610,9 @@
     const article = new window.Readability(dom).parse();
     if (!article || !article.content) { console.warn("Readability returned no content."); return; }
 
-    const overlay = buildOverlay(article.content, article.title, article.byline);
-    attachOverlay(overlay, prefs);
+    container = buildOverlay(article.content, article.title, article.byline);
+
+    attachOverlay(container, prefs);
 
     // Set icons
     setIcon("rv-close", "logout.png");
@@ -612,7 +620,7 @@
     setIcon("rv-font-dec", "text_decrease.png");
     setIcon("rv-width-widen", "widen.png");
     setIcon("rv-width-narrow", "shrink.png");
-    setIcon("rv-tts-play", "play.png");
+    setIcon("rv-tts-play", "TTS.png");
     setIcon("rv-tts-stop", "stop.png");
     setIcon("rv-tts-prev", "prev.png");
     setIcon("rv-tts-prevp", "pprev.png");
@@ -780,6 +788,8 @@
       tts.index = idx;
       highlightCurrent(idx);
       tts.playing = true;
+      tts.btnPlay.style.setProperty('display', 'none');
+      tts.controls.style.setProperty('display', 'inline');
       scheduleAt(idx);
     }
 
@@ -791,7 +801,6 @@
       // drop audio artifacts
       tts.decoded.clear();
       tts.inFlight.clear();
-      console.log('Audio cleared');
       if (wasPlaying) playAt(tts.index);
     }
 

@@ -21,6 +21,21 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 
 const TTS_SERVER = "http://127.0.0.1:9090";
 
+// Simple in-memory cache to avoid spamming the server
+let __voicesCache = { at: 0, data: null };
+
+async function fetchVoices() {
+  const now = Date.now();
+  if (__voicesCache.data && (now - __voicesCache.at) < 60 * 1000) {
+    return __voicesCache.data;
+  }
+  const r = await fetch(`${TTS_SERVER}/voices`, { cache: "no-store" });
+  if (!r.ok) throw new Error(`/voices failed: ${r.status} ${r.statusText}`);
+  const j = await r.json();
+  __voicesCache = { at: now, data: j };
+  return j;
+}
+
 function arrayBufferToBase64(buffer) {
   let binary = '';
   const bytes = new Uint8Array(buffer);
@@ -41,6 +56,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Wrap async logic so we can return true below
   (async () => {
     try {
+      if (msg.type === "tts.listVoices") {
+        const list = await fetchVoices();
+        sendResponse({ ok: true, voices: list });
+        return;
+      }
+
       if (msg.type === "tts.synthesize") {
         const { text, voice, speed, sample_rate = 24000, bitrate = 24000, vbr = "constrained" } = msg.payload || {};
         if (!text) throw new Error("Missing text");

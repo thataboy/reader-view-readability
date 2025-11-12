@@ -42,39 +42,6 @@
     highlightSpan: null, // active <span> wrapper for current sentence
   };
 
-  // Voice list
-  const TTS_VOICES = [
-    "af_heart",
-    "af_alloy",
-    "af_aoede",
-    "af_bella",
-    "af_jessica",
-    "af_kore",
-    "af_nicole",
-    "af_nova",
-    "af_river",
-    "af_sarah",
-    "af_sky",
-    "am_adam",
-    "am_echo",
-    "am_eric",
-    "am_fenrir",
-    "am_liam",
-    "am_michael",
-    "am_onyx",
-    "am_puck",
-    "am_santa",
-    "bf_alice",
-    "bf_emma",
-    "bf_isabella",
-    "bf_lily",
-    "bm_daniel",
-    "bm_fable",
-    "bm_george",
-    "bm_lewis",
-    "ff_siwis"
-  ];
-
   function ttsKey(i){ return `seg:${i}`; }
   function ensureCtx() {
     if (!tts.audioCtx || tts.audioCtx.state === "closed") {
@@ -226,11 +193,20 @@
   }
 
   function stopPlayback(state = "stopped") {
-    if (tts.audioCtx && tts.audioCtx.state !== "closed") {
-      try { tts.audioCtx.close(); } catch {}
-    }
-    tts.audioCtx = null;
+    // stop the current source, don’t close the context
+    try {
+      if (tts.currentSrc) {
+        tts.currentSrc.onended = null;
+        tts.currentSrc.stop();
+      }
+    } catch {}
+    tts.currentSrc = null;
     tts.playing = false;
+
+    // optional: suspend on pause to save CPU
+    if (state === "paused" && tts.audioCtx?.state === "running") {
+      tts.audioCtx.suspend().catch(()=>{});
+    }
     setStatus(state === "stopped" ? "Ready" : "Paused");
   }
 
@@ -639,7 +615,7 @@
   // --------------------------
   // TTS Controls
   // --------------------------
-  let ttsUIState = { prepared: false, voice: "am_liam", speed: 1.0 };
+  let ttsUIState = { prepared: false, voice: "", speed: 1.0 };
 
   function setupStaticTTSControls(overlay, contentHost) {
     const voiceSel = overlay.querySelector("#rv-voice");
@@ -653,22 +629,52 @@
     const btnPrevP = overlay.querySelector("#rv-tts-prevp");
     const btnNextP = overlay.querySelector("#rv-tts-nextp");
     if (!voiceSel || !speedInp) return;
-    voiceSel.innerHTML = "";
-    TTS_VOICES.forEach(v => {
-      const o = document.createElement("option"); o.value = v; o.textContent = v;
-      voiceSel.appendChild(o);
-    });
-    voiceSel.value = ttsUIState.voice;
+
+    async function loadVoicesInto(selectEl) {
+      // Fallback set if server fails (only used if fetch errors)
+      const fallback = [ "ax_liam", "af_heart", "af_sky" ];
+      let voices = [];
+      try {
+        const res = await chrome.runtime.sendMessage({ type: "tts.listVoices" });
+        if (!res?.ok) throw new Error(res?.error || "voices fetch failed");
+        voices = res.voices;
+      } finally {
+        const current = ttsUIState.voice;
+        selectEl.innerHTML = "";
+        voices ||= fallback;
+        for (const v of voices) {
+          const opt = document.createElement("option");
+          opt.value = v;
+          opt.textContent = v;
+          selectEl.appendChild(opt);
+        }
+        // If current is available, keep it; otherwise use first
+        const hasCurrent = voices.some(v => v === current);
+        selectEl.value = hasCurrent ? current : (voices[0] || "");
+        ttsUIState.voice = selectEl.value;
+      }
+    }
+
+    loadVoicesInto(voiceSel);
+
     speedInp.value = ttsUIState.speed;
     speedLabel.textContent = `${speedInp.value}x`;
 
-    // State changes invalidate preparation
-    voiceSel.onchange = () => { ttsUIState.voice = voiceSel.value; ttsUIState.prepared = false; };
-    speedInp.oninput = () => {
-      ttsUIState.speed = parseFloat(speedInp.value);
-      speedLabel.textContent = `${speedInp.value}x`;
-      ttsUIState.prepared = false;
-    };
+    voiceSel.addEventListener("change", () => {
+      if (ttsUIState.voice !== voiceSel.value) {
+        ttsUIState.voice = voiceSel.value;
+        invalidateAudio();
+      }
+    });
+
+    speedInp.addEventListener("input", () => {
+      const newSpeed = parseFloat(speedInp.value);
+      if (ttsUIState.speed !== newSpeed) {
+        ttsUIState.speed = newSpeed;
+        speedLabel.textContent = `${speedInp.value}x`;
+        invalidateAudio();
+      }
+    });
 
     // Segment sentences from article
     function segmentSentences(rootEl) {
@@ -756,7 +762,7 @@
       }
     }
 
-    function jumpAndPlayAt(idx) {
+    function playAt(idx) {
       if (idx < 0 || idx >= tts.segments.length) return;
       stopPlayback();
       tts.index = idx;
@@ -765,13 +771,25 @@
       scheduleAt(idx);
     }
 
+    function invalidateAudio() {
+      const wasPlaying = tts.playing;
+      stopPlayback();
+      tts.playToken++;           // invalidate any pending onended
+      tts.currentSrc = null;
+      // drop audio artifacts
+      tts.decoded.clear();
+      tts.inFlight.clear();
+      console.log('Audio cleared');
+      if (wasPlaying) playAt(tts.index);
+    }
+
     // Button handlers
     btnPlay.onclick = async () => {
       if (tts.playing) return;
       const ok = await ensurePrepared();
       if (!ok) return;
       const startIndex = Math.max(0, tts.index);
-      jumpAndPlayAt(startIndex);
+      playAt(startIndex);
     };
 
     btnPause.onclick = () => { stopPlayback("paused"); };
@@ -794,12 +812,12 @@
 
     btnPrev.onclick = () => {
       const idx = Math.max(0, (tts.index > 0 ? tts.index : 0) - 1);
-      jumpAndPlayAt(idx);
+      playAt(idx);
     };
 
     btnNext.onclick = () => {
       const idx = Math.min(tts.segments.length - 1, (tts.index >= 0 ? tts.index : -1) + 1);
-      jumpAndPlayAt(idx);
+      playAt(idx);
     };
 
     btnPrevP.onclick = () => {
@@ -810,13 +828,13 @@
       const curStart = paragraphStartIndexAt(cur);
       if (curStart <= 0) {
         // already at the first paragraph
-        jumpAndPlayAt(0);
+        playAt(0);
         return;
       }
       // previous paragraph = the run that ends at curStart - 1
       const prevEnd = curStart - 1;
       const prevStart = paragraphStartIndexAt(prevEnd);
-      jumpAndPlayAt(prevStart);
+      playAt(prevStart);
     };
 
     btnNextP.onclick = () => {
@@ -829,10 +847,10 @@
 
       if (nextStart >= tts.meta.length) {
         // already at the last paragraph — stop at end
-        jumpAndPlayAt(paragraphStartIndexAt(cur)); // or just do nothing
+        playAt(paragraphStartIndexAt(cur)); // or just do nothing
         return;
       }
-      jumpAndPlayAt(nextStart);
+      playAt(nextStart);
     };
 
     // Click on paragraph to jump
@@ -866,7 +884,7 @@
       if (idx < 0) {
         idx = tts.meta.findIndex(m => m.el === leafEl);
       }
-      jumpAndPlayAt(idx);
+      playAt(idx);
     }, true);
     // Listen for position updates from scheduler
     chrome.runtime.onMessage.addListener((msg) => {

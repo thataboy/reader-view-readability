@@ -27,7 +27,6 @@
   // --------------------------
   const tts = {
     audioCtx: null,
-    manifestId: null,
     segments: [],
     texts: [],
     index: 0,
@@ -77,7 +76,6 @@
   ];
 
   function ttsKey(i){ return `seg:${i}`; }
-  // function ttsKey(i){ return `${tts.manifestId}:${i}`; }
   function ensureCtx() {
     if (!tts.audioCtx || tts.audioCtx.state === "closed") {
       tts.audioCtx = new (AudioContext || webkitAudioContext)({ sampleRate: 24000 });
@@ -129,7 +127,7 @@
       tts.inFlight.add(i);
       console.log(`Converting ${i + 1}/${tts.segments.length}...`);
       const response = await chrome.runtime.sendMessage({
-        type: "tts.synthesizeOne",
+        type: "tts.synthesize",
         payload: {
           text: tts.texts[i],
           voice: ttsUIState.voice,
@@ -301,16 +299,13 @@
     clearHighlight();
     const m = tts.meta && tts.meta[index];
     if (!m) return;
-
     const r = rangeFromOffsets(m.el, m.start, m.end);
     const span = document.createElement("span");
     span.className = "rv-tts-highlight";
     try {
       r.surroundContents(span);
-    } catch(_){};
-
+    } catch(_){}
     tts.highlightSpan = span;
-
     m.el.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
@@ -644,7 +639,7 @@
   // --------------------------
   // TTS Controls
   // --------------------------
-  let ttsUIState = { prepared: false, manifest: null, voice: "am_liam", speed: 1.0 };
+  let ttsUIState = { prepared: false, voice: "am_liam", speed: 1.0 };
 
   function setupStaticTTSControls(overlay, contentHost) {
     const voiceSel = overlay.querySelector("#rv-voice");
@@ -743,8 +738,6 @@
       tts.meta = meta;                    // parallel metadata
       tts.segments = new Array(texts.length).fill(0);
 
-      tts.manifestId = null;
-      ttsUIState.manifest = null;
       ttsUIState.prepared = true;
       tts.index = 0;
       setStatus(`Ready (${tts.segments.length} segments)`);

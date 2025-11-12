@@ -39,7 +39,10 @@
     prefetchAhead: 4,
     keepBehind: 1,
     statusEl: null,
+    meta: [],            // [{el,start,end}] parallel to tts.texts[index]
+    highlightSpan: null, // active <span> wrapper for current sentence
   };
+
   // Voice list
   const TTS_VOICES = [
     "af_heart",
@@ -166,6 +169,8 @@
       const src = ctx.createBufferSource();          // create node early
       tts.currentSrc = src;
 
+      highlightCurrent(index);
+
       // Attach onended BEFORE any await so we never miss it
       src.onended = () => {
         if (!tts.playing || token !== tts.playToken) return;
@@ -250,6 +255,99 @@
     if (img) img.src = chrome.runtime.getURL(`icons/${file}`);
   }
 
+  function addTTSHighlightStyle() {
+    if (document.getElementById("rv-tts-style")) return;
+    const st = document.createElement("style");
+    st.id = "rv-tts-style";
+    st.textContent = `
+      .rv-tts-highlight{
+        background: rgba(230, 255, 0, .35);
+        border-radius: 4px;
+        box-shadow: 2px 2px rgba(230, 255, 0, .45);
+        transition: background .2s ease;
+      }
+    `;
+    document.head.appendChild(st);
+  }
+
+  function clearHighlight() {
+    const span = tts.highlightSpan;
+    if (span && span.parentNode) {
+      const parent = span.parentNode;
+      while (span.firstChild) parent.insertBefore(span.firstChild, span);
+      parent.removeChild(span);
+    }
+    tts.highlightSpan = null;
+  }
+
+  function rangeFromOffsets(el, start, end) {
+    const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    let cur = 0, startNode=null, startOff=0, endNode=null, endOff=0, n;
+    while ((n = tw.nextNode())) {
+      const len = n.nodeValue.length, next = cur + len;
+      if (startNode == null && start >= cur && start <= next) { startNode = n; startOff = start - cur; }
+      if (endNode == null && end >= cur && end <= next) { endNode = n; endOff = end - cur; }
+      cur = next;
+      if (startNode && endNode) break;
+    }
+    const r = document.createRange();
+    if (!startNode || !endNode) { r.selectNodeContents(el); return r; }
+    r.setStart(startNode, Math.max(0, Math.min(startOff, startNode.nodeValue.length)));
+    r.setEnd(endNode, Math.max(0, Math.min(endOff, endNode.nodeValue.length)));
+    return r;
+  }
+
+  function highlightCurrent(index) {
+    clearHighlight();
+    const m = tts.meta && tts.meta[index];
+    if (!m) return;
+
+    const r = rangeFromOffsets(m.el, m.start, m.end);
+    const span = document.createElement("span");
+    span.className = "rv-tts-highlight";
+    try {
+      r.surroundContents(span);
+    } catch(_){};
+
+    tts.highlightSpan = span;
+
+    m.el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  function offsetInElementFromPoint(el, clientX, clientY) {
+    // Build a collapsed range at the click point
+    let r = null;
+    if (document.caretRangeFromPoint) {
+      r = document.caretRangeFromPoint(clientX, clientY);
+    } else if (document.caretPositionFromPoint) {
+      const pos = document.caretPositionFromPoint(clientX, clientY);
+      if (pos) {
+        r = document.createRange();
+        r.setStart(pos.offsetNode, pos.offset);
+        r.collapse(true);
+      }
+    }
+    if (!r) return null;
+
+    // Ensure the caret is inside `el`; if not, snap to start of el
+    if (!el.contains(r.startContainer)) {
+      const snap = document.createRange();
+      snap.selectNodeContents(el);
+      snap.collapse(true);
+      r = snap;
+    }
+
+    // Sum lengths of text nodes up to the caret
+    const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    let cur = 0, n;
+    while ((n = tw.nextNode())) {
+      if (n === r.startContainer) {
+        return cur + Math.min(r.startOffset, n.nodeValue.length);
+      }
+      cur += n.nodeValue.length;
+    }
+    return cur; // fallback (end)
+  }
   // --------------------------
   // UI + overlay
   // --------------------------
@@ -388,8 +486,10 @@
               <button class="rv-btn" id="rv-tts-play" title="Play"><img></button>
               <button class="rv-btn" id="rv-tts-pause" title="Pause"><img></button>
               <button class="rv-btn" id="rv-tts-stop" title="Stop"><img></button>
+              <button class="rv-btn" id="rv-tts-prevp" title="Previous paragraph"><img></button>
               <button class="rv-btn" id="rv-tts-prev" title="Previous sentence"><img></button>
               <button class="rv-btn" id="rv-tts-next" title="Next sentence"><img></button>
+              <button class="rv-btn" id="rv-tts-nextp" title="Next paragraph"><img></button>
               <span id="rv-tts-status"></span>
             </div>
           </div>
@@ -535,7 +635,10 @@
     setIcon("rv-tts-pause", "pause.png");
     setIcon("rv-tts-stop", "stop.png");
     setIcon("rv-tts-prev", "prev.png");
+    setIcon("rv-tts-prevp", "pprev.png");
     setIcon("rv-tts-next", "next.png");
+    setIcon("rv-tts-nextp", "nnext.png");
+    addTTSHighlightStyle();
   }
 
   // --------------------------
@@ -552,6 +655,8 @@
     const btnStop = overlay.querySelector("#rv-tts-stop");
     const btnPrev = overlay.querySelector("#rv-tts-prev");
     const btnNext = overlay.querySelector("#rv-tts-next");
+    const btnPrevP = overlay.querySelector("#rv-tts-prevp");
+    const btnNextP = overlay.querySelector("#rv-tts-nextp");
     if (!voiceSel || !speedInp) return;
     voiceSel.innerHTML = "";
     TTS_VOICES.forEach(v => {
@@ -575,45 +680,69 @@
       const seg = new Intl.Segmenter(undefined, { granularity: "sentence" });
       const BLOCKS = 'p, blockquote, li, h1, h2, h3, h4, h5, h6, div';
       const scope = rootEl.querySelector('#rv-article-body');
-      if (!scope) return { sentences: [], paraMap: [] };
+      if (!scope) return { texts: [], meta: [] };
 
-      // Only leaf blocks — blocks that do NOT contain other blocks
-      const paras = Array.from(
-        scope.querySelectorAll(
-          `:is(${BLOCKS}):not(:has(${BLOCKS})):not(dialog *):not(header *):not(footer *):not(figure *)`
-        )
-      );
+      // Leaf blocks only (avoid parent+child duplication)
+      const paras = Array.from(scope.querySelectorAll(
+        `:is(${BLOCKS}):not(:has(${BLOCKS})):not(dialog *):not(header *):not(footer *):not(figure *)`
+      ));
 
-      const out = [];
-      const paraMap = [];
-      let idx = 0;
+      const texts = [];
+      const meta = [];
 
-      paras.forEach((el, pIndex) => {
-        const text = (el.innerText || "").trim();
-        if (!text) return;
+      for (const el of paras) {
+        // 1) Build "plain" from actual text nodes so offsets match Range/TreeWalker
+        const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+        let plain = "";
+        let nodes = [];
+        let pos = 0, n;
 
-        const sentences = Array.from(seg.segment(text))
-          .map(s => s.segment.trim())
-          .filter(Boolean);
+        while ((n = tw.nextNode())) {
+          const val = (n.nodeValue || "").replace(/\r/g, ""); // normalize CR
+          nodes.push({ node: n, start: pos, end: pos + val.length });
+          plain += val;
+          pos += val.length;
+        }
+        if (!plain) continue;
 
-        sentences.forEach(s => {
-          out.push({ i: idx, text: s, pIndex, el });
-          paraMap.push(pIndex);
-          idx++;
-        });
-      });
+        // 2) Segment the "plain" string and compute trimmed offsets
+        // Intl.Segmenter gives us d.index (start) and d.segment (text)
+        for (const d of seg.segment(plain)) {
+          const raw = d.segment;
+          if (!raw) continue;
+          const start0 = d.index;
+          const end0 = start0 + raw.length;
 
-      return { sentences: out, paraMap };
+          // trim leading/trailing whitespace within this sentence
+          const lead = (/^\s*/.exec(raw)?.[0].length) ?? 0;
+          const trail = (/\s*$/.exec(raw)?.[0].length) ?? 0;
+
+          const start = start0 + lead;
+          const end   = end0 - trail;
+          if (end <= start) continue;
+
+          const spoken = plain.slice(start, end).trim();
+          if (!spoken) continue;
+
+          texts.push(spoken);
+          meta.push({ el, start, end });
+        }
+      }
+
+      return { texts, meta };
     }
-
     // Prepare synthesis
     async function ensurePrepared() {
       if (ttsUIState.prepared && tts.segments?.length) return true;
       setStatus("Preparing speech...");
-      const { sentences } = segmentSentences(contentHost);
-      if (!sentences.length) { setStatus("No text to speak"); return false; }
-      tts.texts = sentences.map(s => s.text);
-      tts.segments = new Array(tts.texts.length).fill(0); // we only need the count
+
+      const { texts, meta } = segmentSentences(contentHost);
+      if (!texts.length) { setStatus("No text to speak"); return false; }
+
+      tts.texts = texts;                  // keep using your existing property
+      tts.meta = meta;                    // parallel metadata
+      tts.segments = new Array(texts.length).fill(0);
+
       tts.manifestId = null;
       ttsUIState.manifest = null;
       ttsUIState.prepared = true;
@@ -621,6 +750,7 @@
       setStatus(`Ready (${tts.segments.length} segments)`);
       return true;
     }
+
     // Highlight current sentence
     function highlight(i) {
       const prev = document.querySelector(".rv-tts-active");
@@ -633,43 +763,118 @@
       }
     }
 
+    function jumpAndPlayAt(idx) {
+      if (idx < 0 || idx >= tts.segments.length) return;
+      stopPlayback();
+      tts.index = idx;
+      highlightCurrent(idx);
+      tts.playing = true;
+      scheduleAt(idx);
+    }
+
     // Button handlers
     btnPlay.onclick = async () => {
-      stopPlayback();
       if (tts.playing) return;
       const ok = await ensurePrepared();
       if (!ok) return;
-      tts.playing = true;
       const startIndex = Math.max(0, tts.index);
-      scheduleAt(startIndex);
+      jumpAndPlayAt(startIndex);
     };
 
     btnPause.onclick = () => { stopPlayback("paused"); };
-    btnStop.onclick = () => { stopPlayback(); tts.index = 0; };
+    btnStop.onclick = () => { stopPlayback(); };
+
+    function paragraphStartIndexAt(idx) {
+      if (!tts.meta?.length || idx < 0 || idx >= tts.meta.length) return -1;
+      const el = tts.meta[idx].el;
+      while (idx > 0 && tts.meta[idx - 1].el === el) idx--;
+      return idx;
+    }
+
+    function paragraphEndIndexAt(idx) {
+      if (!tts.meta?.length || idx < 0 || idx >= tts.meta.length) return -1;
+      const el = tts.meta[idx].el;
+      while (idx + 1 < tts.meta.length && tts.meta[idx + 1].el === el) idx++;
+      return idx;
+    }
+
 
     btnPrev.onclick = () => {
       const idx = Math.max(0, (tts.index > 0 ? tts.index : 0) - 1);
-      stopPlayback(); tts.index = idx;
+      jumpAndPlayAt(idx);
     };
 
     btnNext.onclick = () => {
       const idx = Math.min(tts.segments.length - 1, (tts.index >= 0 ? tts.index : -1) + 1);
-      stopPlayback(); tts.index = idx;
+      jumpAndPlayAt(idx);
+    };
+
+    btnPrevP.onclick = () => {
+      if (!ttsUIState.prepared || !tts.meta?.length) return;
+      // If index is unset, treat as 0
+      let cur = Math.max(0, tts.index | 0);
+      // move to start of current paragraph
+      const curStart = paragraphStartIndexAt(cur);
+      if (curStart <= 0) {
+        // already at the first paragraph
+        jumpAndPlayAt(0);
+        return;
+      }
+      // previous paragraph = the run that ends at curStart - 1
+      const prevEnd = curStart - 1;
+      const prevStart = paragraphStartIndexAt(prevEnd);
+      jumpAndPlayAt(prevStart);
+    };
+
+    btnNextP.onclick = () => {
+      if (!ttsUIState.prepared || !tts.meta?.length) return;
+
+      let cur = Math.max(0, tts.index | 0);
+      // move to end of current paragraph
+      const curEnd = paragraphEndIndexAt(cur);
+      const nextStart = curEnd + 1;
+
+      if (nextStart >= tts.meta.length) {
+        // already at the last paragraph — stop at end
+        jumpAndPlayAt(paragraphStartIndexAt(cur)); // or just do nothing
+        return;
+      }
+      jumpAndPlayAt(nextStart);
     };
 
     // Click on paragraph to jump
     contentHost.addEventListener("click", (e) => {
-      const p = e.target.closest("p,li,blockquote,h1,h2,h3,h4,h5,h6");
-      if (!p || !ttsUIState.prepared) return;
-      const { sentences } = segmentSentences(contentHost);
-      const found = sentences.find(s => s.el === p) || sentences.find(s => s.el?.contains(p));
-      if (found) {
-        stopPlayback();
-        tts.index = found.i;
-        highlight(found.i);
-      }
-    }, true);
+      if (!ttsUIState.prepared || !tts.meta?.length) return;
 
+      // Start from a visible block near the click
+      const blocks = "p,li,blockquote,h1,h2,h3,h4,h5,h6,div";
+      const base = e.target.closest(blocks);
+      if (!base) return;
+
+      // Snap to our LEAF block (same rule used in segmentSentences)
+      const leafSel = `:is(${blocks}):not(:has(${blocks}))`;
+      const leafEl = base.closest(leafSel);
+      if (!leafEl) return;
+
+      // Compute character offset within the leaf element
+      const off = offsetInElementFromPoint(leafEl, e.clientX, e.clientY);
+      if (off == null) return;
+
+      // Find the sentence in this element that spans the offset
+      let idx = -1;
+      for (let i = 0; i < tts.meta.length; i++) {
+        const m = tts.meta[i];
+        if (m.el === leafEl && off >= m.start && off < m.end) {
+          idx = i;
+          break;
+        }
+      }
+      // Fallback: first sentence in this element
+      if (idx < 0) {
+        idx = tts.meta.findIndex(m => m.el === leafEl);
+      }
+      jumpAndPlayAt(idx);
+    }, true);
     // Listen for position updates from scheduler
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === "tts.positionChanged") highlight(msg.payload.index);

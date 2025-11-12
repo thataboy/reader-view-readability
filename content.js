@@ -561,7 +561,6 @@
 
     // Toolbar handlers
     container.querySelector("#rv-close").addEventListener("click", cleanup);
-    surface.addEventListener("click", (e) => { if (e.target === surface) cleanup(); });
 
     container.querySelector("#rv-font-inc").addEventListener("click", () => {
       prefs.fontSize = Math.min(32, prefs.fontSize + 1);
@@ -873,23 +872,20 @@
       playAt(nextStart);
     };
 
-    // Click on paragraph to jump
-    contentHost.addEventListener("click", (e) => {
-      if (!ttsUIState.prepared || !tts.meta?.length) return;
-
+    function findIdxAtClick(e) {
       // Start from a visible block near the click
       const blocks = "p,li,blockquote,h1,h2,h3,h4,h5,h6,div";
       const base = e.target.closest(blocks);
-      if (!base) return;
+      if (!base) return null;
 
       // Snap to our LEAF block (same rule used in segmentSentences)
       const leafSel = `:is(${blocks}):not(:has(${blocks}))`;
       const leafEl = base.closest(leafSel);
-      if (!leafEl) return;
+      if (!leafEl) return null;
 
       // Compute character offset within the leaf element
       const off = offsetInElementFromPoint(leafEl, e.clientX, e.clientY);
-      if (off == null) return;
+      if (off == null) return null;
 
       // Find the sentence in this element that spans the offset
       let idx = -1;
@@ -904,8 +900,25 @@
       if (idx < 0) {
         idx = tts.meta.findIndex(m => m.el === leafEl);
       }
-      playAt(idx);
+      return idx;
+    }
+
+    // Double click on sentence to start playing there
+    contentHost.addEventListener("dblclick", async (e) => {
+      if (tts.playing) return;
+      const ok = await ensurePrepared();
+      if (!ok) return;
+      const idx = findIdxAtClick(e);
+      if (idx !== null) playAt(idx);
     }, true);
+
+    // Single click on sentence while playing to jump there
+    contentHost.addEventListener("click", (e) => {
+      if (!tts.playing) return;
+      const idx = findIdxAtClick(e);
+      if (idx !== null) playAt(idx);
+    }, true);
+
     // Listen for position updates from scheduler
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === "tts.positionChanged") highlight(msg.payload.index);

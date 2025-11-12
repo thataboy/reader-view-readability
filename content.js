@@ -497,6 +497,21 @@
       outside.forEach(n => { try { n.removeAttribute("inert"); } catch(_){} });
       document.documentElement.classList.remove("rv-active");
       container.remove();
+      if (!tts) return;
+      if (tts.audioCtx) {
+        try { tts.audioCtx.close(); } catch {}
+      }
+      tts.audioCtx = null;
+      tts.segments = [];
+      tts.texts = [];
+      tts.index = 0;
+      tts.decoded = new Map();
+      tts.inFlight = new Set();
+      tts.currentSrc = null;
+      tts.playToken = 0;
+      tts.statusEl = null;
+      tts.meta = [];
+      tts.highlightSpan = null;
     }
 
     function selectTarget() {

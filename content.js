@@ -1,5 +1,4 @@
 // content.js
-
 (function () {
   if (window.__readerViewInstalled) return;
   window.__readerViewInstalled = true;
@@ -37,7 +36,7 @@
     inFlight: new Set(),
     currentSrc: null,
     playToken: 0,
-    prefetchAhead: 3,
+    prefetchAhead: 4,
     keepBehind: 1,
     statusEl: null,
   };
@@ -125,7 +124,7 @@
         if (tts.decoded.has(k)) return tts.decoded.get(k);
       }
       tts.inFlight.add(i);
-      setStatus(`Loading audio ${i + 1}/${tts.segments.length}...`);
+      console.log(`Converting ${i + 1}/${tts.segments.length}...`);
       const response = await chrome.runtime.sendMessage({
         type: "tts.synthesizeOne",
         payload: {
@@ -170,6 +169,8 @@
       // Attach onended BEFORE any await so we never miss it
       src.onended = () => {
         if (!tts.playing || token !== tts.playToken) return;
+        tts.playToken = 0;
+        tts.index = 0;
         tts.currentSrc = null;
         const next = index + 1;
         if (next < tts.segments.length) scheduleAt(next);
@@ -571,25 +572,38 @@
 
     // Segment sentences from article
     function segmentSentences(rootEl) {
-      const seg = (typeof Intl !== "undefined" && Intl.Segmenter) ?
-        new Intl.Segmenter(undefined, { granularity: "sentence" }) : null;
-      const out = []; const paraMap = [];
+      const seg = new Intl.Segmenter(undefined, { granularity: "sentence" });
+      const BLOCKS = 'p, blockquote, li, h1, h2, h3, h4, h5, h6, div';
+      const scope = rootEl.querySelector('#rv-article-body');
+      if (!scope) return { sentences: [], paraMap: [] };
+
+      // Only leaf blocks — blocks that do NOT contain other blocks
       const paras = Array.from(
-        rootEl.querySelector('#rv-article-body')
-          .querySelectorAll(':is(p, blockquote, li, h1, h2, h3, h4, h5, h6, div):not(dialog *):not(header *):not(footer *):not(figure *)')
+        scope.querySelectorAll(
+          `:is(${BLOCKS}):not(:has(${BLOCKS})):not(dialog *):not(header *):not(footer *):not(figure *)`
+        )
       );
+
+      const out = [];
+      const paraMap = [];
       let idx = 0;
+
       paras.forEach((el, pIndex) => {
-        const text = (el.innerText || "").trim(); if (!text) return;
-        const sentences = seg ? Array.from(seg.segment(text)).map(s => s.segment.trim()).filter(Boolean)
-                              : text.split(/(?<=[\.\!\?]['"”’\)]*)\s+/).filter(Boolean);
+        const text = (el.innerText || "").trim();
+        if (!text) return;
+
+        const sentences = Array.from(seg.segment(text))
+          .map(s => s.segment.trim())
+          .filter(Boolean);
+
         sentences.forEach(s => {
           out.push({ i: idx, text: s, pIndex, el });
           paraMap.push(pIndex);
           idx++;
         });
       });
-      return { sentences: out, paraIndexBySentence: paraMap };
+
+      return { sentences: out, paraMap };
     }
 
     // Prepare synthesis
@@ -621,6 +635,7 @@
 
     // Button handlers
     btnPlay.onclick = async () => {
+      stopPlayback();
       if (tts.playing) return;
       const ok = await ensurePrepared();
       if (!ok) return;

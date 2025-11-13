@@ -209,8 +209,8 @@
     } catch {}
     tts.currentSrc = null;
     tts.playing = false;
-    tts.btnPlay.style.setProperty('display', 'inline');
-    tts.controls.style.setProperty('display', 'none');
+    tts.btnPlay.style.display = 'inline';
+    tts.controls.style.display = 'none';
     setStatus("Ready");
   }
 
@@ -231,21 +231,6 @@
     const btn = document.getElementById(btn_id);
     const img = btn && btn.querySelector("img");
     if (img) img.src = chrome.runtime.getURL(`icons/${file}`);
-  }
-
-  function addTTSHighlightStyle() {
-    if (document.getElementById("rv-tts-style")) return;
-    const st = document.createElement("style");
-    st.id = "rv-tts-style";
-    st.textContent = `
-      .rv-tts-highlight{
-        background: rgba(230, 255, 0, .35);
-        border-radius: 4px;
-        box-shadow: 2px 2px rgba(230, 255, 0, .45);
-        transition: background .2s ease;
-      }
-    `;
-    document.head.appendChild(st);
   }
 
   function clearHighlight() {
@@ -330,124 +315,6 @@
     const container = document.createElement("div");
     container.id = "reader-view-overlay";
     container.innerHTML = `
-      <style>
-        #reader-view-overlay { position: relative; z-index: 2147483647; }
-        #rv-surface { position: fixed; inset: 0; overflow: auto; background: var(--rv-bg); color: var(--rv-fg);
-          font-size: var(--rv-font-size, 17px);
-          line-height: 1.7em;
-        }
-        #rv-content {
-          max-width: var(--rv-maxw, 860px);
-          margin: 24px auto; padding: 4px 16px;
-          font-family: var(--rv-font-family) !important;
-        }
-        #rv-content img { max-width: 100%; height: auto; }
-        #rv-content p { margin: 1em 0; white-space: normal; }
-        #rv-content h1, #rv-content h2, #rv-content h3 { line-height: 1.25; margin: 1.2em 0 .6em; }
-        #rv-content table { width: 100%; border-collapse: collapse; }
-        #rv-content th, #rv-content td { border: 1px solid var(--rv-border); padding: 6px 8px; }
-        :root { --rv-bg:#0b0d10; --rv-fg:#e6e8eb; --rv-border:#2b2f36; --rv-panel:#12151a; }
-        @media (prefers-color-scheme: light) {
-          :root { --rv-bg:#f8f9fb; --rv-fg:#101418; --rv-border:#dfe3e8; --rv-panel:#ffffff; }
-        }
-        #rv-toolbar {
-          position: sticky;
-          top: 0;
-          z-index: 2;
-          display: flex;
-          flex-wrap: nowrap;
-          align-items: center;
-          gap: 4px;
-          padding: 4px 10px;
-          background: var(--rv-panel);
-          border-bottom: 1px solid var(--rv-border);
-          backdrop-filter: saturate(120%) blur(6px);
-          -webkit-backdrop-filter: saturate(120%) blur(6px);
-        }
-        #rv-toolbar .rv-btn {
-          all: unset;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          border: 1px solid var(--rv-border);
-          border-radius: 8px;
-          padding: 4px 8px;
-          cursor: pointer;
-          width: auto !important;
-          min-width: 0 !important;
-          max-width: none !important;
-          flex: 0 0 auto !important;
-          box-sizing: border-box;
-        }
-        #rv-toolbar .rv-btn img {
-          cursor: pointer;
-          width: 22px; height: 22px;
-          background: black;
-          color: white;
-        }
-        #rv-toolbar .rv-group {
-          display: inline-flex;
-          gap: 4px;
-        }
-        #rv-toolbar .rv-btn:focus-visible {
-          outline: 2px solid var(--rv-border);
-          outline-offset: 2px;
-        }
-        .rv-spacer {
-          flex: 1 1 auto;
-          min-width: 0;
-        }
-        html.rv-active body > *:not(#reader-view-overlay) { user-select: none !important; -webkit-user-select: none !important; }
-        #rv-surface {
-          position: fixed;
-          inset: 0;
-          height: 100vh;
-          overflow-y: scroll !important;
-          overflow-x: hidden !important;
-          scrollbar-gutter: stable both-edges;
-          -webkit-overflow-scrolling: touch;
-          overscroll-behavior: contain;
-          z-index: 2147483647;
-        }
-        #rv-surface::-webkit-scrollbar {
-          width: 12px;
-          background: transparent;
-        }
-        #rv-surface::-webkit-scrollbar-track {
-          background: transparent;
-          border-left: 1px solid var(--rv-border);
-        }
-        #rv-surface::-webkit-scrollbar-thumb {
-          background: #888;
-          border-radius: 8px;
-          border: 1px solid #666;
-          background-clip: content-box;
-        }
-        #rv-surface::-webkit-scrollbar-thumb:hover {
-          background: #8a9099;
-          background-clip: content-box;
-        }
-        #rv-surface::-webkit-scrollbar-corner {
-          background: transparent;
-        }
-        html.rv-active, html.rv-active body {
-          overflow: hidden !important;
-        }
-        .rv-tts-active {
-          background: rgba(255, 255, 0, 0.2) !important;
-          transition: background 0.3s ease;
-        }
-        #rv-tts-status, #rv-speed-label {
-          font-size: 12px;
-          color: var(--rv-fg);
-          opacity: 0.9;
-          margin-left: 8px;
-        }
-        #rv-speed-label {
-          width: 3em;
-          margin: 0 2px 0 4px;
-        }
-      </style>
       <div id="rv-surface" role="dialog" aria-label="Reader View" tabindex="-1">
         <div id="rv-toolbar">
           <button class="rv-btn" id="rv-close" title="Close"><img></button>
@@ -483,6 +350,11 @@
         </div>
       </div>
     `;
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.id = "rv-style-link";
+    link.href = chrome.runtime.getURL("overlay.css");
+    document.head.appendChild(link);
     return container;
   }
 
@@ -637,7 +509,6 @@
     setIcon("rv-tts-prevp", "pprev.png");
     setIcon("rv-tts-next", "next.png");
     setIcon("rv-tts-nextp", "nnext.png");
-    addTTSHighlightStyle();
   }
 
   // --------------------------
@@ -799,8 +670,8 @@
       tts.index = idx;
       highlightCurrent(idx);
       tts.playing = true;
-      tts.btnPlay.style.setProperty('display', 'none');
-      tts.controls.style.setProperty('display', 'inline');
+      tts.btnPlay.style.display = 'none';
+      tts.controls.style.display = 'inline';
       scheduleAt(idx);
     }
 

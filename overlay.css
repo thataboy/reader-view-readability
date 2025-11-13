@@ -1,14 +1,169 @@
-#rv-tts-overlay {
-  position: fixed; inset: auto 16px 16px 16px;
-  background: rgba(24,24,28,0.9);
-  color: #fff; padding: 8px 10px; border-radius: 10px;
-  font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-  z-index: 2147483647; display: flex; gap: 10px; align-items: center;
+#reader-view-overlay {
+    position: relative;
+    z-index: 2147483647;
 }
-#rv-tts-overlay .rv-tts-row > * { margin-right: 8px; }
-#rv-tts-overlay select, #rv-tts-overlay input[type=range], #rv-tts-overlay button {
-  outline: none;
+#rv-surface {
+    position: fixed;
+    inset: 0;
+    overflow: auto;
+    background: var(--rv-bg);
+    color: var(--rv-fg);
+    font-size: var(--rv-font-size, 17px);
+    line-height: 1.7em;
 }
-.rv-tts-status { opacity: 0.7; margin-left: 8px; }
-
-.rv-tts-active { background: linear-gradient(transparent 30%, rgba(255,230,150,0.5) 30%, rgba(255,230,150,0.5) 70%, transparent 70%); }
+#rv-content {
+    max-width: var(--rv-maxw, 860px);
+    margin: 24px auto;
+    padding: 4px 16px;
+    font-family: var(--rv-font-family) !important;
+}
+#rv-content img {
+    max-width: 100%;
+    height: auto;
+}
+#rv-content p {
+    margin: 1em 0;
+    white-space: normal;
+}
+#rv-content h1,
+#rv-content h2,
+#rv-content h3 {
+    line-height: 1.25;
+    margin: 1.2em 0 0.6em;
+}
+#rv-content table {
+    width: 100%;
+    border-collapse: collapse;
+}
+#rv-content th,
+#rv-content td {
+    border: 1px solid var(--rv-border);
+    padding: 6px 8px;
+}
+:root {
+    --rv-bg: #0b0d10;
+    --rv-fg: #e6e8eb;
+    --rv-border: #2b2f36;
+    --rv-panel: #12151a;
+}
+@media (prefers-color-scheme: light) {
+    :root {
+        --rv-bg: #f8f9fb;
+        --rv-fg: #101418;
+        --rv-border: #dfe3e8;
+        --rv-panel: #ffffff;
+    }
+}
+@media (prefers-color-scheme: dark) {
+    :root {
+        --rv-bg: #111;
+        --rv-fg: #e8e8e8;
+        --rv-border: #113338;
+        --rv-panel: #333;
+    }
+}
+#rv-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 4px;
+    margin-top: 3px;
+    padding: 2px 10px;
+    background: var(--rv-panel);
+    border: 1px solid var(--rv-border);
+    backdrop-filter: saturate(120%) blur(6px);
+    -webkit-backdrop-filter: saturate(120%) blur(6px);
+}
+#rv-toolbar .rv-btn {
+    all: unset;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--rv-border);
+    border-radius: 8px;
+    padding: 4px 8px;
+    cursor: pointer;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    flex: 0 0 auto !important;
+    box-sizing: border-box;
+}
+#rv-toolbar .rv-btn img {
+    cursor: pointer;
+    width: 22px;
+    height: 22px;
+    background: black;
+    color: white;
+}
+#rv-toolbar .rv-group {
+    display: inline-flex;
+    gap: 4px;
+}
+.rv-spacer {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+#rv-surface {
+    position: fixed;
+    inset: 0;
+    height: 100vh;
+    overflow-y: scroll !important;
+    overflow-x: hidden !important;
+    scrollbar-gutter: stable both-edges;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    z-index: 2147483647;
+}
+#rv-surface:focus {  /* remove focus ring by chrome */
+  outline: none !important;
+}
+#rv-surface::-webkit-scrollbar {
+    width: 12px;
+    background: transparent;
+}
+#rv-surface::-webkit-scrollbar-track {
+    background: transparent;
+    border-left: 1px solid var(--rv-border);
+}
+#rv-surface::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 8px;
+    border: 1px solid #666;
+    background-clip: content-box;
+}
+#rv-surface::-webkit-scrollbar-thumb:hover {
+    background: #8a9099;
+    background-clip: content-box;
+}
+#rv-surface::-webkit-scrollbar-corner {
+    background: transparent;
+}
+html.rv-active,
+html.rv-active body {
+    overflow: hidden !important;
+}
+.rv-tts-active {
+    background: rgba(255, 255, 0, 0.2) !important;
+    transition: background 0.3s ease;
+}
+#rv-tts-status,
+#rv-speed-label {
+    font-size: 12px;
+    color: var(--rv-fg);
+    opacity: 0.9;
+    margin-left: 8px;
+}
+#rv-speed-label {
+    width: 3em;
+    margin: 0 2px 0 4px;
+}
+.rv-tts-highlight{
+  background: rgba(230, 255, 0, .35);
+  border-radius: 4px;
+  box-shadow: 2px 2px rgba(230, 255, 0, .45);
+  transition: background .2s ease;
+}

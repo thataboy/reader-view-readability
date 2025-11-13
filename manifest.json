@@ -30,6 +30,7 @@
     {
       "resources": [
         "readability.js",
+        "overlay.css",
         "icons/*.png"
       ],
       "matches": [

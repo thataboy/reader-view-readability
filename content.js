@@ -167,10 +167,6 @@
       src.start(t0);
       tts.playing = true;
       setStatus();
-      chrome.runtime.sendMessage({
-        type: "tts.positionChanged",
-        payload: { index }
-      });
 
       // Prefetch without blocking the onended attachment/playback
       (async () => {
@@ -271,7 +267,7 @@
       r.surroundContents(span);
     } catch(_){}
     tts.highlightSpan = span;
-    m.el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    m.el.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 
   function offsetInElementFromPoint(el, clientX, clientY) {
@@ -652,18 +648,6 @@
       return true;
     }
 
-    // Highlight current sentence
-    function highlight(i) {
-      const prev = document.querySelector(".rv-tts-active");
-      if (prev) prev.classList.remove("rv-tts-active");
-
-      const { sentences } = segmentSentences(contentHost);
-      if (sentences[i]?.el) {
-        sentences[i].el.classList.add("rv-tts-active");
-        sentences[i].el.scrollIntoView({ block: "center", behavior: "smooth" });
-      }
-    }
-
     function playAt(idx) {
       if (idx < 0 || idx >= tts.segments.length) return;
       stopPlayback();
@@ -802,9 +786,5 @@
       if (idx !== null) playAt(idx);
     }, true);
 
-    // Listen for position updates from scheduler
-    chrome.runtime.onMessage.addListener((msg) => {
-      if (msg?.type === "tts.positionChanged") highlight(msg.payload.index);
-    });
   }
 })();

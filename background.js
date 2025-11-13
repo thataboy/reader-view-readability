@@ -22,17 +22,14 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 const TTS_SERVER = "http://127.0.0.1:9090";
 
 // Simple in-memory cache to avoid spamming the server
-let __voicesCache = { at: 0, data: null };
+let __voicesCache = null;
 
 async function fetchVoices() {
-  const now = Date.now();
-  if (__voicesCache.data && (now - __voicesCache.at) < 60 * 1000) {
-    return __voicesCache.data;
-  }
+  if (__voicesCache) return __voicesCache;
   const r = await fetch(`${TTS_SERVER}/voices`, { cache: "no-store" });
   if (!r.ok) throw new Error(`/voices failed: ${r.status} ${r.statusText}`);
   const j = await r.json();
-  __voicesCache = { at: now, data: j };
+  __voicesCache = j;
   return j;
 }
 

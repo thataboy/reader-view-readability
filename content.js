@@ -39,10 +39,12 @@
     keepBehind: 1,
     statusEl: null,      // status label
     btnPlay: null,
+    btnStop: null,
     controls: null,      // buttons other than Play
     meta: [],            // [{el,start,end}] parallel to tts.texts[index]
     highlightSpan: null, // active <span> wrapper for current sentence
   };
+  let voices = [];
 
   function ttsKey(i){ return `seg:${i}`; }
   function ensureCtx() {
@@ -205,7 +207,7 @@
     } catch {}
     tts.currentSrc = null;
     tts.playing = false;
-    tts.btnPlay.style.display = 'inline';
+    tts.btnPlay.style.display = 'inherit';
     tts.controls.style.display = 'none';
     setStatus("Ready");
   }
@@ -221,6 +223,9 @@
 
   window.addEventListener("keydown", (e) => {
     if (e.altKey && e.key.toLowerCase() === "r") { e.preventDefault(); toggle(); }
+    if (e.ctrlKey && e.keyCode === 32 && tts?.btnPlay) {
+      if (tts.playing) tts.btnStop.click(); else tts.btnPlay.click();
+    }
   }, true);
 
   function setIcon(btn_id, file) {
@@ -369,6 +374,7 @@
     // save status element
     tts.statusEl = container.querySelector("#rv-tts-status");
     tts.btnPlay = container.querySelector("#rv-tts-play");
+    tts.btnStop = container.querySelector("#rv-tts-stop");
     tts.controls = container.querySelector("#rv-tts-controls");
     setStatus("Ready");
 
@@ -527,11 +533,12 @@
     async function loadVoicesInto(selectEl) {
       // Fallback set if server fails (only used if fetch errors)
       const fallback = [ "ax_liam", "af_heart", "af_sky" ];
-      let voices = [];
       try {
-        const res = await chrome.runtime.sendMessage({ type: "tts.listVoices" });
-        if (!res?.ok) throw new Error(res?.error || "voices fetch failed");
-        voices = res.voices;
+        if (voices.length == 0) {
+          const res = await chrome.runtime.sendMessage({ type: "tts.listVoices" });
+          if (!res?.ok) throw new Error(res?.error || "voices fetch failed");
+          voices = res.voices;
+        }
       } finally {
         const current = prefs.voice;
         selectEl.innerHTML = "";
@@ -576,6 +583,24 @@
 
     // Segment sentences from article
     function segmentSentences(rootEl) {
+      // Known abbreviations that should NOT end a sentence
+      const ABBREV = new Set([
+        "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",
+        "No", "Fig", "Rev",
+        "U.S", "U.K", "a.m", "p.m", "e.g", "i.e", "etc", "vs", "cf",
+        "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug",
+        "Sep", "Sept", "Oct", "Nov", "Dec",
+      ]);
+
+      // Helper: does segment end with an abbreviation?
+      function endsWithAbbreviation(str) {
+        // Strip trailing quotes/paren
+        const cleaned = str.trim().replace(/['"”’)\]]+$/, "");
+        const m = cleaned.match(/([A-Za-z]+)\.$/);
+        if (!m) return false;
+        return ABBREV.has(m[1]);
+      }
+
       const seg = new Intl.Segmenter(undefined, { granularity: "sentence" });
       const BLOCKS = 'p, blockquote, li, h1, h2, h3, h4, h5, h6, div';
       const scope = rootEl.querySelector('#rv-article-body');
@@ -604,20 +629,45 @@
         }
         if (!plain) continue;
 
-        // 2) Segment the "plain" string and compute trimmed offsets
-        // Intl.Segmenter gives us d.index (start) and d.segment (text)
+        // --- 2) Segment the "plain" string but MERGE bad splits (e.g., "Dr.", "No.", etc.) ---
+
+        // 1st pass: collect raw segments with offsets
+        let rawSegs = [];
         for (const d of seg.segment(plain)) {
-          const raw = d.segment;
-          if (!raw) continue;
-          const start0 = d.index;
-          const end0 = start0 + raw.length;
+          rawSegs.push({
+            start: d.index,
+            end: d.index + d.segment.length,
+            raw: d.segment,
+          });
+        }
 
-          // trim leading/trailing whitespace within this sentence
-          const lead = (/^\s*/.exec(raw)?.[0].length) ?? 0;
-          const trail = (/\s*$/.exec(raw)?.[0].length) ?? 0;
+        // 2nd pass: merge when segment ends with known abbreviation
+        let merged = [];
+        for (let i = 0; i < rawSegs.length; i++) {
+          let cur = rawSegs[i];
 
-          const start = start0 + lead;
-          const end   = end0 - trail;
+          while (endsWithAbbreviation(plain.slice(cur.start, cur.end)) && i + 1 < rawSegs.length) {
+            // merge with next segment
+            const nxt = rawSegs[i + 1];
+            cur = {
+              start: cur.start,
+              end: nxt.end,
+              raw: plain.slice(cur.start, nxt.end)
+            };
+            i++; // skip the next one
+          }
+          merged.push(cur);
+        }
+
+        // 3rd pass: trim whitespace and push into final lists
+        for (const segm of merged) {
+          const raw = plain.slice(segm.start, segm.end);
+
+          const lead = raw.match(/^\s*/) [0].length;
+          const trail = raw.match(/\s*$/)[0].length;
+
+          const start = segm.start + lead;
+          const end   = segm.end - trail;
           if (end <= start) continue;
 
           const spoken = plain.slice(start, end).trim();
@@ -655,7 +705,7 @@
       highlightCurrent(idx);
       tts.playing = true;
       tts.btnPlay.style.display = 'none';
-      tts.controls.style.display = 'inline';
+      tts.controls.style.display = 'inherit';
       scheduleAt(idx);
     }
 

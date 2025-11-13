@@ -9,9 +9,9 @@
     "storage"
   ],
   "action": {
-    "default_title": "Toggle Reader View",
+    "default_title": "Readability",
     "default_icon": {
-      "128": "icons/icon128.png"
+      "128": "icons/readable.png"
     }
   },
   "background": {

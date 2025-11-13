@@ -44,14 +44,14 @@
     --rv-bg: #0b0d10;
     --rv-fg: #e6e8eb;
     --rv-border: #2b2f36;
-    --rv-panel: #12151aaa;
+    --rv-panel: #12251aaa;
 }
 @media (prefers-color-scheme: light) {
     :root {
         --rv-bg: #f8f9fb;
         --rv-fg: #101418;
         --rv-border: #dfe3e8;
-        --rv-panel: #ffffffaa;
+        --rv-panel: #ddffeeaa;
     }
 }
 @media (prefers-color-scheme: dark) {
@@ -59,7 +59,7 @@
         --rv-bg: #111;
         --rv-fg: #e8e8e8;
         --rv-border: #113338;
-        --rv-panel: #333333aa;
+        --rv-panel: #113322aa;
     }
 }
 #rv-toolbar {
@@ -162,8 +162,8 @@ html.rv-active body {
     margin: 0 2px 0 4px;
 }
 .rv-tts-highlight{
-  background: rgba(230, 255, 0, .35);
+  background: rgba(200, 255, 50, .2);
   border-radius: 4px;
-  box-shadow: 2px 2px rgba(230, 255, 0, .45);
+  box-shadow: 2px 2px rgba(230, 255, 0, .65);
   transition: background .2s ease;
 }

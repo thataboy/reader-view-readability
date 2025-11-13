@@ -53,8 +53,12 @@
   }
 
   // Show status message to user
-  function setStatus(msg) {
-    if (tts.statusEl) tts.statusEl.textContent = msg;
+  // set msg to '' to show playing status
+  function setStatus(msg = '') {
+    if (msg==='' && tts.playing) {
+      msg = `Playing ${tts.index + 1} / ${tts.segments.length}`;
+    }
+    tts.statusEl.textContent = msg;
     // console.log(msg);
   }
 
@@ -87,6 +91,7 @@
       if (tts.decoded.has(k)) return tts.decoded.get(k);
       // If a fetch for this index is already running, let that one finish
       if (tts.inFlight.has(i)) {
+        console.log(`wait inFlight ${i}`);
         // Busy-wait with micro-pauses until decoded is populated or inFlight clears
         while (tts.inFlight.has(i) && !tts.decoded.has(k)) {
           await new Promise(r => setTimeout(r, 10));
@@ -94,7 +99,7 @@
         if (tts.decoded.has(k)) return tts.decoded.get(k);
       }
       tts.inFlight.add(i);
-      // console.log(`Converting ${i + 1}/${tts.segments.length}...`);
+      setStatus(`Text->Speech ${i + 1} / ${tts.segments.length}...`);
       const response = await chrome.runtime.sendMessage({
         type: "tts.synthesize",
         payload: {
@@ -108,6 +113,7 @@
       });
 
       if (!response?.ok) throw new Error(response?.error || "Synthesis failed");
+      setStatus();
       const buf = base64ToArrayBuffer(response.base64);
       const ab = await decodeBuffer(i, buf);
       return ab;
@@ -160,8 +166,7 @@
       const t0 = ctx.currentTime + 0.12;
       src.start(t0);
       tts.playing = true;
-
-      setStatus(`Playing ${index + 1} / ${tts.segments.length}`);
+      setStatus();
       chrome.runtime.sendMessage({
         type: "tts.positionChanged",
         payload: { index }
@@ -519,8 +524,8 @@
       tts.segments = [];
       tts.texts = [];
       tts.index = 0;
-      tts.decoded = new Map();
-      tts.inFlight = new Set();
+      tts.decoded.clear();
+      tts.inFlight.clear();
       tts.currentSrc = null;
       tts.playToken = 0;
       tts.statusEl = null;
@@ -800,13 +805,13 @@
     }
 
     function invalidateAudio() {
+      tts.inFlight.clear();
+      tts.decoded.clear();
       const wasPlaying = tts.playing;
       stopPlayback();
       tts.playToken++;           // invalidate any pending onended
       tts.currentSrc = null;
       // drop audio artifacts
-      tts.decoded.clear();
-      tts.inFlight.clear();
       if (wasPlaying) playAt(tts.index);
     }
 

@@ -328,8 +328,14 @@
       <style>
         #reader-view-overlay { position: relative; z-index: 2147483647; }
         #rv-surface { position: fixed; inset: 0; overflow: auto; background: var(--rv-bg); color: var(--rv-fg);
-          font: var(--rv-font-size, 17px)/1.7 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
-        #rv-content { max-width: var(--rv-maxw, 860px); margin: 24px auto; padding: 4px 16px; }
+          font-size: var(--rv-font-size, 17px);
+          line-height: 1.7em;
+        }
+        #rv-content {
+          max-width: var(--rv-maxw, 860px);
+          margin: 24px auto; padding: 4px 16px;
+          font-family: var(--rv-font-family) !important;
+        }
         #rv-content img { max-width: 100%; height: auto; }
         #rv-content p { margin: 1em 0; white-space: normal; }
         #rv-content h1, #rv-content h2, #rv-content h3 { line-height: 1.25; margin: 1.2em 0 .6em; }
@@ -484,6 +490,7 @@
 
     // Apply saved prefs
     surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
+    contentHost.style.setProperty("--rv-font-family", 'Verdana,Geneva,Helvetica,sans-serif');
     contentHost.style.setProperty("--rv-maxw", `${prefs.maxWidth}px`);
 
     // save status element

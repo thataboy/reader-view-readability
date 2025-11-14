@@ -235,12 +235,24 @@
   }
 
   function clearHighlight() {
-    const span = tts.highlightSpan;
-    if (span && span.parentNode) {
-      const parent = span.parentNode;
-      while (span.firstChild) parent.insertBefore(span.firstChild, span);
-      parent.removeChild(span);
+    const target = tts.highlightSpan;
+    if (!target) return;
+
+    // Case 1: our normal wrapper span
+    if (target.nodeType === Node.ELEMENT_NODE &&
+        target.tagName === "SPAN" &&
+        target.classList.contains("rv-tts-highlight") &&
+        target.parentNode) {
+      const parent = target.parentNode;
+      while (target.firstChild) parent.insertBefore(target.firstChild, target);
+      parent.removeChild(target);
+    } else if (target.nodeType === Node.ELEMENT_NODE &&
+               target.classList &&
+               target.classList.contains("rv-tts-highlight")) {
+      // Case 2: fallback where we just added a class to an existing element
+      target.classList.remove("rv-tts-highlight");
     }
+
     tts.highlightSpan = null;
   }
 
@@ -265,14 +277,24 @@
     clearHighlight();
     const m = tts.meta && tts.meta[index];
     if (!m) return;
+
     const r = rangeFromOffsets(m.el, m.start, m.end);
     const span = document.createElement("span");
     span.className = "rv-tts-highlight";
+
     try {
-      r.surroundContents(span);
-    } catch(_){}
-    tts.highlightSpan = span;
-    m.el.scrollIntoView({ block: "center", behavior: "smooth" });
+      // More robust than surroundContents: this splits nodes if needed
+      const contents = r.extractContents();
+      span.appendChild(contents);
+      r.insertNode(span);
+      tts.highlightSpan = span;
+      span.scrollIntoView({ block: "center", behavior: "smooth" });
+    } catch (e) {
+      // Fallback: just highlight the whole paragraph/element
+      m.el.classList.add("rv-tts-highlight");
+      tts.highlightSpan = m.el;
+      m.el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
   }
 
   function offsetInElementFromPoint(el, clientX, clientY) {
@@ -329,7 +351,7 @@
             <div id="rv-tts" style="margin-left:20px;display:flex;gap:6px;align-items:center">
               <select id="rv-voice" title="Voice"></select>
               <label class="rv-inline" title="Speed">
-                <input id="rv-speed" type="range" min="0.7" max="1.5" step="0.05" value="1.0" style="width:120px" />
+              <input id="rv-speed" type="range" min="0.7" max="1.5" step="0.05" value="1.0" />
               </label>
               <span id="rv-speed-label"></span>
               <button class="rv-btn" id="rv-tts-play" title="Play"><img></button>
@@ -559,6 +581,7 @@
     loadVoicesInto(voiceSel);
 
     speedInp.value = prefs.speed;
+    ttsUIState.speed = prefs.speed;
     speedLabel.textContent = `${speedInp.value}x`;
 
     voiceSel.addEventListener("change", () => {
@@ -572,9 +595,9 @@
 
     speedInp.addEventListener("input", () => {
       const newSpeed = parseFloat(speedInp.value);
-      if (ttsUIState.speed !== newSpeed) {
+      if (ttsUIState.speed != newSpeed) {
         ttsUIState.speed = newSpeed;
-        speedLabel.textContent = `${speedInp.value}x`;
+        speedLabel.textContent = `${newSpeed}x`;
         prefs.speed = newSpeed;
         savePrefs(prefs);
         invalidateAudio();

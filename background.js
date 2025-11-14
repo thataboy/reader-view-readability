@@ -63,7 +63,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const { text, voice, speed, sample_rate = 24000, bitrate = 24000, vbr = "constrained" } = msg.payload || {};
         if (!text) throw new Error("Missing text");
 
-        const r = await fetch("http://127.0.0.1:9090/synthesize", {
+        const r = await fetch(`${TTS_SERVER}/synthesize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text, voice, speed, sample_rate, bitrate, vbr })

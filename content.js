@@ -32,10 +32,10 @@
     index: 0,
     playing: false,
     decoded: new Map(),
-    inFlight: new Set(),
+    inFlight: new Map(),
     currentSrc: null,
     playToken: 0,
-    prefetchAhead: 4,    // # TTS segments to prefetch
+    prefetchAhead: 3,    // # TTS segments to prefetch
     keepBehind: 1,
     statusEl: null,      // status label
     btnPlay: null,
@@ -55,7 +55,7 @@
   }
 
   // Show status message to user
-  // set msg to '' to show playing status
+  // set msg to '' or omit to show playing status
   function setStatus(msg = '') {
     if (msg==='' && tts.playing) {
       msg = `Playing ${tts.index + 1} / ${tts.segments.length}`;
@@ -85,47 +85,65 @@
     return ab;
   }
 
+  // Ensure only one remote synthesis runs at a time across segments
+  let synthChain = Promise.resolve();
+  function withSynthLock(fn) {
+    const next = synthChain.then(fn);
+    // keep the chain alive even if a task throws
+    synthChain = next.catch(() => {});
+    return next;
+  }
+  // Fetch + decode a segment through background proxy
   // Fetch + decode a segment through background proxy
   async function fetchAndDecodeSegment(i) {
-    try {
-      // If already decoded, return it
-      const k = ttsKey(i);
-      if (tts.decoded.has(k)) return tts.decoded.get(k);
-      // If a fetch for this index is already running, let that one finish
-      if (tts.inFlight.has(i)) {
-        console.log(`wait inFlight ${i}`);
-        // Busy-wait with micro-pauses until decoded is populated or inFlight clears
-        while (tts.inFlight.has(i) && !tts.decoded.has(k)) {
-          await new Promise(r => setTimeout(r, 10));
-        }
-        if (tts.decoded.has(k)) return tts.decoded.get(k);
-      }
-      tts.inFlight.add(i);
-      setStatus(`Text->Speech ${i + 1} / ${tts.segments.length}...`);
-      const response = await chrome.runtime.sendMessage({
-        type: "tts.synthesize",
-        payload: {
-          text: tts.texts[i],
-          voice: ttsUIState.voice,
-          speed: ttsUIState.speed,
-          sample_rate: 24000,
-          bitrate: 24000,
-          vbr: "constrained",
-        }
-      });
+    const k = ttsKey(i);
 
-      if (!response?.ok) throw new Error(response?.error || "Synthesis failed");
-      setStatus();
-      const buf = base64ToArrayBuffer(response.base64);
-      const ab = await decodeBuffer(i, buf);
-      return ab;
-    } catch (err) {
-      setStatus(`Error: ${err.message}`);
-      throw err;
-    } finally {
-      tts.inFlight.delete(i);
+    // 1) Already decoded
+    if (tts.decoded.has(k)) return tts.decoded.get(k);
+
+    // 2) Already in flight for this index: reuse its Promise
+    if (tts.inFlight.has(i)) {
+      return tts.inFlight.get(i);
     }
+
+    // 3) New synth task for this index
+    const task = (async () => {
+      try {
+        setStatus(`Text→Speech ${i + 1} / ${tts.segments.length} ...`);
+
+        // Only one synth at a time goes through this lock
+        const response = await withSynthLock(() =>
+          chrome.runtime.sendMessage({
+            type: "tts.synthesize",
+            payload: {
+              text: tts.texts[i],
+              voice: ttsUIState.voice,
+              speed: ttsUIState.speed,
+              sample_rate: 24000,
+              bitrate: 24000,
+              vbr: "constrained",
+            }
+          })
+        );
+
+        if (!response?.ok) throw new Error(response?.error || "Synthesis failed");
+
+        const buf = base64ToArrayBuffer(response.base64);
+        const ab = await decodeBuffer(i, buf);
+        setStatus();
+        return ab;
+      } catch (err) {
+        setStatus(`Error: ${err.message}`);
+        throw err;
+      } finally {
+        tts.inFlight.delete(i);
+      }
+    })();
+
+    tts.inFlight.set(i, task);
+    return task;
   }
+
   // Main playback scheduler
   async function scheduleAt(index) {
     if (!tts.playing || !tts.segments.length) return;
@@ -138,10 +156,12 @@
       await ctx.resume();
     }
 
+    const token = ++tts.playToken;
+
     try {
-      const token = ++tts.playToken;
-      const curP = fetchAndDecodeSegment(index);     // start fetch/decode
-      const src = ctx.createBufferSource();          // create node early
+      // 1) Fetch & decode ONLY this segment (no overlap with previous)
+      const curP = fetchAndDecodeSegment(index);
+      const src = ctx.createBufferSource();
       tts.currentSrc = src;
 
       highlightCurrent(index);
@@ -149,26 +169,35 @@
       // Attach onended BEFORE any await so we never miss it
       src.onended = () => {
         if (!tts.playing || token !== tts.playToken) return;
-        tts.playToken = 0;
-        tts.index = 0;
         tts.currentSrc = null;
         const next = index + 1;
-        if (next < tts.segments.length) scheduleAt(next);
-        else {
-          stopPlayback();
+        if (next < tts.segments.length) {
+          scheduleAt(next);
+        } else {
+          tts.playing = false;
           setStatus("Finished");
           chrome.runtime.sendMessage({ type: "tts.stateChanged", payload: "stopped" });
         }
       };
 
-      // Now await audio, set buffer, and start
+      // 2) Wait for THIS segment's audio
       const cur = await curP;
+
+      // If something changed (voice/jump/stop) while we were waiting, bail
+      if (!tts.playing || token !== tts.playToken) return;
+
+      // 3) Start playback of this segment
       src.buffer = cur;
       src.connect(ctx.destination);
       const t0 = ctx.currentTime + 0.12;
       src.start(t0);
       tts.playing = true;
-      setStatus();
+
+      setStatus(`Playing ${index + 1} / ${tts.segments.length}`);
+      chrome.runtime.sendMessage({
+        type: "tts.positionChanged",
+        payload: { index }
+      });
 
       // Prefetch without blocking the onended attachment/playback
       (async () => {
@@ -223,7 +252,7 @@
 
   window.addEventListener("keydown", (e) => {
     if (e.altKey && e.key.toLowerCase() === "r") { e.preventDefault(); toggle(); }
-    if (e.ctrlKey && e.keyCode === 32 && tts?.btnPlay) {
+    if (e.altKey && e.keyCode === 32 && tts?.btnPlay) {
       if (tts.playing) tts.btnStop.click(); else tts.btnPlay.click();
     }
   }, true);

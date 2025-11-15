@@ -174,7 +174,8 @@
         if (next < tts.segments.length) {
           scheduleAt(next);
         } else {
-          tts.playing = false;
+          stopPlayback();
+          tts.index = 0;
           setStatus("Finished");
           chrome.runtime.sendMessage({ type: "tts.stateChanged", payload: "stopped" });
         }
@@ -452,7 +453,6 @@
       tts.decoded.clear();
       tts.inFlight.clear();
       tts.currentSrc = null;
-      tts.playToken = 0;
       tts.statusEl = null;
       tts.meta = [];
       tts.highlightSpan = null;

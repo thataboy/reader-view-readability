@@ -19,7 +19,9 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 
 // background.js
 
-const TTS_SERVER = "http://127.0.0.1:9090";
+const kokoro = true;
+const TTS_SERVER =  (kokoro) ? "http://127.0.0.1:9090" : "http://127.0.0.1:9000";
+// const TTS_SERVER =  (kokoro) ? "http://192.168.1.11:9090" : "http://127.0.0.1:9000";
 
 // Simple in-memory cache to avoid spamming the server
 let __voicesCache = null;
@@ -29,8 +31,8 @@ async function fetchVoices() {
   const r = await fetch(`${TTS_SERVER}/voices`, { cache: "no-store" });
   if (!r.ok) throw new Error(`/voices failed: ${r.status} ${r.statusText}`);
   const j = await r.json();
-  __voicesCache = j;
-  return j;
+  __voicesCache = (kokoro) ? j : j.voices;
+  return __voicesCache;
 }
 
 function arrayBufferToBase64(buffer) {
@@ -63,10 +65,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const { text, voice, speed, sample_rate = 24000, bitrate = 24000, vbr = "constrained" } = msg.payload || {};
         if (!text) throw new Error("Missing text");
 
-        const r = await fetch(`${TTS_SERVER}/synthesize`, {
+        const r = (kokoro) ?
+        await fetch(`${TTS_SERVER}/synthesize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text, voice, speed, sample_rate, bitrate, vbr })
+        }) :
+        await fetch(`${TTS_SERVER}/v1/audio/speech`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            "model": "voxcpm-0.5b",
+            "input": text,
+            "voice": voice,
+            "response_format": "opus"
+          })
         });
         if (!r.ok) throw new Error(`/synthesize failed: ${r.status} ${r.statusText}`);
         const buf = await r.arrayBuffer();

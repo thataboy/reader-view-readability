@@ -59,7 +59,7 @@ function arrayBufferToBase64(buffer) {
 
 function sanitize(text) {
   if (!text) return null;
-  return text.replace(/[-()\[\]\|~`/]/g, ' ')
+  return text.replace(/[-()\[\]\|~`/!]/g, ' ')
     .replace(/[\.\*\-]{3,}/g, '.').replace(/’/g, "'").replace(/[—:;]/g, ', ')
     // .replace(/[^\n\x20-\x7E]/g, ' ').replace(/ +/g, ' ').trim();
     .replace(/ +/g, ' ').trim();
@@ -81,14 +81,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       if (msg.type === "tts.synthesize") {
-        const { text, voice, speed, sample_rate = 24000, bitrate = 24000, vbr = "constrained" } = msg.payload || {};
+        const { text, voice, speed } = msg.payload || {};
         let input = (server == Server.VOX_ANE) ? sanitize(text) : text?.trim();
         if (!input) input = ' ';
         const r = (server == Server.MY_KOKORO) ?
         await fetch(`${TTS_SERVER}/synthesize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ input, voice, speed, sample_rate, bitrate, vbr })
+          body: JSON.stringify({ input, voice, speed })
         }) :
         (server == Server.VOX_ANE) ?
         await fetch(`${TTS_SERVER}/v1/audio/speech`, {

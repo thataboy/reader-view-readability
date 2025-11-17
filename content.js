@@ -98,13 +98,6 @@
     const k = ttsKey(i);
 
     const text = tts.texts[i];
-    // if text empty, resolve with an empty AudioBuffer so scheduler continues
-
-    if (!text || !text.trim()) {
-      const ctx = ensureCtx();
-      const silent = ctx.createBuffer(1, ctx.sampleRate * 0.05, ctx.sampleRate); // 50ms silent
-      return silent;
-    }
 
     // 1) Already decoded
     if (tts.decoded.has(k)) return tts.decoded.get(k);
@@ -126,10 +119,7 @@
             payload: {
               text: tts.texts[i],
               voice: ttsUIState.voice,
-              speed: ttsUIState.speed,
-              sample_rate: 24000,
-              bitrate: 24000,
-              vbr: "constrained",
+              speed: ttsUIState.speed
             }
           })
         );
@@ -238,14 +228,14 @@
         tts.currentSrc.stop();
       }
     } catch {}
-    if (tts.inFlight) {
-      tts.inFlight.clear();
-      chrome.runtime.sendMessage({ type: "tts.cancel" });
-    }
     tts.currentSrc = null;
     tts.playing = false;
     tts.btnPlay.style.display = 'inherit';
     tts.controls.style.display = 'none';
+    if (tts.inFlight) {
+      tts.inFlight.clear();
+      chrome.runtime.sendMessage({ type: "tts.cancel" });
+    }
     setStatus("Ready");
   }
 
@@ -543,6 +533,8 @@
     if (!window.Readability) { console.error("Readability not found. Inject readability.js first."); return; }
 
     const prefs = await loadPrefs();
+    document.querySelectorAll('script, modal, dialog, figure, header, footer, video, button, form, [aria-hidden]')
+      .forEach(el => el.remove());
 
     const dom = new DOMParser().parseFromString(
       "<!doctype html>" + document.documentElement.outerHTML,
@@ -665,9 +657,8 @@
 
       // Leaf blocks only (avoid parent+child duplication)
       const paras = Array.from(scope.querySelectorAll(
-        `:is(${BLOCKS}):not(:has(${BLOCKS})):not(dialog *):not(header *):not(footer *):not(figure *)`
+        `:is(${BLOCKS}):not(:has(${BLOCKS}))`
       ));
-
       const texts = [];
       const meta = [];
 

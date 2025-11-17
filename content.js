@@ -99,6 +99,7 @@
 
     const text = tts.texts[i];
     // if text empty, resolve with an empty AudioBuffer so scheduler continues
+
     if (!text || !text.trim()) {
       const ctx = ensureCtx();
       const silent = ctx.createBuffer(1, ctx.sampleRate * 0.05, ctx.sampleRate); // 50ms silent
@@ -237,6 +238,10 @@
         tts.currentSrc.stop();
       }
     } catch {}
+    if (tts.inFlight) {
+      tts.inFlight.clear();
+      chrome.runtime.sendMessage({ type: "tts.cancel" });
+    }
     tts.currentSrc = null;
     tts.playing = false;
     tts.btnPlay.style.display = 'inherit';
@@ -453,7 +458,6 @@
       tts.texts = [];
       tts.index = 0;
       tts.decoded.clear();
-      tts.inFlight.clear();
       tts.currentSrc = null;
       tts.meta = [];
       tts.highlightSpan = null;

@@ -5,8 +5,8 @@ const Server = Object.freeze({
     VOX_API: 2
 });
 
-// const server = Server.MY_KOKORO;
-const server = Server.VOX_ANE;
+const server = Server.MY_KOKORO;
+// const server = Server.VOX_ANE;
 // const server = Server.VOX_API;
 
 
@@ -42,9 +42,7 @@ async function fetchVoices() {
   if (!r.ok) throw new Error(`/voices failed: ${r.status} ${r.statusText}`);
   const j = await r.json();
   // console.log(j);
-  __voicesCache = (server == Server.MY_KOKORO) ? j :
-                  (server == Server.VOX_ANE) ? j.voices :
-                  j.voices.map(item => item.id);
+  __voicesCache = (server !== Server.VOX_API) ? j.voices : j.voices.map(item => item.id);
   return __voicesCache;
 }
 
@@ -60,6 +58,7 @@ function arrayBufferToBase64(buffer) {
 }
 
 function sanitize(text) {
+  if (!text) return null;
   return text.replace(/[-()\[\]\|~`/]/g, ' ')
     .replace(/[\.\*\-]{3,}/g, '.').replace(/’/g, "'").replace(/[—:;]/g, ', ')
     // .replace(/[^\n\x20-\x7E]/g, ' ').replace(/ +/g, ' ').trim();
@@ -83,11 +82,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       if (msg.type === "tts.synthesize") {
         const { text, voice, speed, sample_rate = 24000, bitrate = 24000, vbr = "constrained" } = msg.payload || {};
+        let input = (server == Server.VOX_ANE) ? sanitize(text) : text?.trim();
+        if (!input) input = ' ';
         const r = (server == Server.MY_KOKORO) ?
         await fetch(`${TTS_SERVER}/synthesize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, voice, speed, sample_rate, bitrate, vbr })
+          body: JSON.stringify({ input, voice, speed, sample_rate, bitrate, vbr })
         }) :
         (server == Server.VOX_ANE) ?
         await fetch(`${TTS_SERVER}/v1/audio/speech`, {
@@ -95,7 +96,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             "model": "voxcpm-0.5b",
-            "input": sanitize(text),
+            input,
             voice,
             "response_format": "wav"
           })
@@ -111,7 +112,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           },
           body: JSON.stringify({
             "model": "tts-1",
-            "input": text,
+            input,
             voice,
             "response_format": "wav"
           })
@@ -120,6 +121,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const buf = await r.arrayBuffer();
         const b64 = arrayBufferToBase64(buf);
         sendResponse({ ok: true, base64: b64 });
+        return;
+      }
+
+      if (msg.type === "tts.cancel") {
+        fetch(`${TTS_SERVER}/v1/audio/speech/cancel`, { method: "POST" });
         return;
       }
 

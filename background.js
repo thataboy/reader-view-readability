@@ -1,4 +1,14 @@
 // background.js
+const Server = Object.freeze({
+    MY_KOKORO: 0,
+    VOX_ANE: 1,
+    VOX_API: 2
+});
+
+// const server = Server.MY_KOKORO;
+const server = Server.VOX_ANE;
+// const server = Server.VOX_API;
+
 
 // ----- Reader View Injection (unchanged) -----
 async function injectAndToggle(tabId) {
@@ -17,21 +27,24 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   if (command === "toggle-reader" && tab && tab.id) injectAndToggle(tab.id);
 });
 
-// background.js
 
-const kokoro = true;
-const TTS_SERVER =  (kokoro) ? "http://127.0.0.1:9090" : "http://127.0.0.1:9000";
-// const TTS_SERVER =  (kokoro) ? "http://192.168.1.11:9090" : "http://127.0.0.1:9000";
+const TTS_SERVER =  (server == Server.MY_KOKORO) ? "http://127.0.0.1:9090" :
+                    (server == Server.VOX_ANE) ? "http://127.0.0.1:9000" :
+                    "http://127.0.0.1:8000";
 
 // Simple in-memory cache to avoid spamming the server
 let __voicesCache = null;
 
 async function fetchVoices() {
   if (__voicesCache) return __voicesCache;
-  const r = await fetch(`${TTS_SERVER}/voices`, { cache: "no-store" });
+  const pref = (server == Server.VOX_API) ? "v1/" : "";
+  const r = await fetch(`${TTS_SERVER}/${pref}voices`);
   if (!r.ok) throw new Error(`/voices failed: ${r.status} ${r.statusText}`);
   const j = await r.json();
-  __voicesCache = (kokoro) ? j : j.voices;
+  // console.log(j);
+  __voicesCache = (server == Server.MY_KOKORO) ? j :
+                  (server == Server.VOX_ANE) ? j.voices :
+                  j.voices.map(item => item.id);
   return __voicesCache;
 }
 
@@ -44,6 +57,13 @@ function arrayBufferToBase64(buffer) {
   }
   // The btoa() function creates a Base64-encoded ASCII string
   return btoa(binary);
+}
+
+function sanitize(text) {
+  return text.replace(/[-()\[\]\|~`/]/g, ' ')
+    .replace(/[\.\*\-]{3,}/g, '.').replace(/’/g, "'").replace(/[—:;]/g, ', ')
+    // .replace(/[^\n\x20-\x7E]/g, ' ').replace(/ +/g, ' ').trim();
+    .replace(/ +/g, ' ').trim();
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -63,22 +83,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       if (msg.type === "tts.synthesize") {
         const { text, voice, speed, sample_rate = 24000, bitrate = 24000, vbr = "constrained" } = msg.payload || {};
-        if (!text) throw new Error("Missing text");
-
-        const r = (kokoro) ?
+        const r = (server == Server.MY_KOKORO) ?
         await fetch(`${TTS_SERVER}/synthesize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text, voice, speed, sample_rate, bitrate, vbr })
         }) :
+        (server == Server.VOX_ANE) ?
         await fetch(`${TTS_SERVER}/v1/audio/speech`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             "model": "voxcpm-0.5b",
+            "input": sanitize(text),
+            voice,
+            "response_format": "wav"
+          })
+        }) :
+        await fetch(`${TTS_SERVER}/v1/audio/speech`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Prompt-Speech-Enhancement": "False",
+            "X-Text-Normalization": "True",
+            "X-CFG-Value": "2.5",
+            "X-Inference-Timesteps": "10"
+          },
+          body: JSON.stringify({
+            "model": "tts-1",
             "input": text,
-            "voice": voice,
-            "response_format": "opus"
+            voice,
+            "response_format": "wav"
           })
         });
         if (!r.ok) throw new Error(`/synthesize failed: ${r.status} ${r.statusText}`);

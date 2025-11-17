@@ -94,9 +94,16 @@
     return next;
   }
   // Fetch + decode a segment through background proxy
-  // Fetch + decode a segment through background proxy
   async function fetchAndDecodeSegment(i) {
     const k = ttsKey(i);
+
+    const text = tts.texts[i];
+    // if text empty, resolve with an empty AudioBuffer so scheduler continues
+    if (!text || !text.trim()) {
+      const ctx = ensureCtx();
+      const silent = ctx.createBuffer(1, ctx.sampleRate * 0.05, ctx.sampleRate); // 50ms silent
+      return silent;
+    }
 
     // 1) Already decoded
     if (tts.decoded.has(k)) return tts.decoded.get(k);
@@ -146,27 +153,26 @@
 
   // Main playback scheduler
   async function scheduleAt(index) {
-    if (!tts.playing || !tts.segments.length) return;
-
-    tts.index = index;
-    const ctx = ensureCtx();
-
-    // Resume context if needed (user gesture requirement)
-    if (ctx.state === "suspended") {
-      await ctx.resume();
-    }
-
     const token = ++tts.playToken;
 
     try {
-      // 1) Fetch & decode ONLY this segment (no overlap with previous)
-      const curP = fetchAndDecodeSegment(index);
+      // Fetch and Wait for this segment's audio
+      const cur = await fetchAndDecodeSegment(index);
+      // If something changed (voice/jump/stop) while we were waiting, bail
+      if (!tts.playing || !tts.segments.length) return;
+
+      tts.index = index;
+      const ctx = ensureCtx();
+
+      // Resume context if needed (user gesture requirement)
+      if (ctx.state === "suspended") {
+        await ctx.resume();
+      }
+
       const src = ctx.createBufferSource();
       tts.currentSrc = src;
 
-      highlightCurrent(index);
-
-      // Attach onended BEFORE any await so we never miss it
+      // Attach onended
       src.onended = () => {
         if (!tts.playing || token !== tts.playToken) return;
         tts.currentSrc = null;
@@ -181,17 +187,13 @@
         }
       };
 
-      // 2) Wait for THIS segment's audio
-      const cur = await curP;
+      highlightCurrent(index);
 
-      // If something changed (voice/jump/stop) while we were waiting, bail
-      if (!tts.playing || token !== tts.playToken) return;
-
-      // 3) Start playback of this segment
+      // Start playback of this segment
       src.buffer = cur;
       src.connect(ctx.destination);
-      const t0 = ctx.currentTime + 0.12;
-      src.start(t0);
+      // const t0 = ctx.currentTime; + 0.12;
+      src.start();
       tts.playing = true;
 
       setStatus(`Playing ${index + 1} / ${tts.segments.length}`);
@@ -453,7 +455,6 @@
       tts.decoded.clear();
       tts.inFlight.clear();
       tts.currentSrc = null;
-      tts.statusEl = null;
       tts.meta = [];
       tts.highlightSpan = null;
     }

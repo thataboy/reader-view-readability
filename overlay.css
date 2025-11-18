@@ -45,6 +45,7 @@
     --rv-fg: #e6e8eb;
     --rv-border: #2b2f36;
     --rv-panel: #12251abb;
+    --rv-button: #12251aee;
     ::selection {
       background-color: #225599;
       color: #e8e8e8;
@@ -56,6 +57,7 @@
         --rv-fg: #101418;
         --rv-border: #dfe3e8;
         --rv-panel: #ddffeebb;
+        --rv-button: #ddffeeee;
     }
     ::selection {
       background-color: #2291ee;
@@ -68,6 +70,7 @@
         --rv-fg: #e8e8e8;
         --rv-border: #113338;
         --rv-panel: #113322bb;
+        --rv-button: #113322dd;
     }
     ::selection {
       background-color: #225599;
@@ -95,6 +98,7 @@
     align-items: center;
     justify-content: center;
     border: 1px solid var(--rv-border);
+    background: var(--rv-button);
     border-radius: 6px;
     padding: 2px 6px;
     cursor: pointer;
@@ -166,7 +170,7 @@ html.rv-active body {
     overflow: hidden !important;
 }
 .rv-tts-active {
-    background: rgba(255, 255, 0, 0.2) !important;
+    background: rgba(255, 255, 0, 0.3) !important;
     transition: background 0.3s ease;
 }
 #rv-tts-status,
@@ -181,7 +185,7 @@ html.rv-active body {
     margin: 0 2px 0 4px;
 }
 .rv-tts-highlight{
-  background: rgba(200, 255, 50, .2);
+  background: rgba(200, 255, 50, .3);
   border-radius: 4px;
   box-shadow: 2px 2px rgba(230, 255, 0, .65);
   transition: background .2s ease;

@@ -5,8 +5,8 @@ const Server = Object.freeze({
     VOX_API: 2
 });
 
-const server = Server.MY_KOKORO;
-// const server = Server.VOX_ANE;
+// const server = Server.MY_KOKORO;
+const server = Server.VOX_ANE;
 // const server = Server.VOX_API;
 
 
@@ -59,10 +59,13 @@ function arrayBufferToBase64(buffer) {
 
 function sanitize(text) {
   if (!text) return null;
-  return text.replace(/[-()\[\]\|~`/!]/g, ' ')
-    .replace(/[\.\*\-]{3,}/g, '.').replace(/’/g, "'").replace(/[—:;]/g, ', ')
+  return text.replace(/[–()[\]|~`‘“”/!]/g, ' ')
+    .replace(/(\.|\*|\-){3,}/g, '.').replace(/’/g, "'").replace(/[—:;]/g, ', ')
     // .replace(/[^\n\x20-\x7E]/g, ' ').replace(/ +/g, ' ').trim();
-    .replace(/ +/g, ' ').trim();
+    .replace(/\s+/g, ' ')
+    .replace(/([,.])\s*[.,]/g, '$1 ')
+    .replace(/\s*([,.])/g, '$1').trim()
+    .replace(/^[,.]\s*/, '').replace(/(\s*[,.]\s*)+$/, '.');
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -83,7 +86,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg.type === "tts.synthesize") {
         const { text, voice, speed } = msg.payload || {};
         let input = (server == Server.VOX_ANE) ? sanitize(text) : text?.trim();
-        if (!input) input = ' ';
+        if (!input || server == Server.VOX_ANE && input.length < 10) {
+          sendResponse({ error: '/synthesize failed: Text empty or too short' });
+          return
+        }
         const r = (server == Server.MY_KOKORO) ?
         await fetch(`${TTS_SERVER}/synthesize`, {
           method: "POST",
@@ -98,7 +104,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             "model": "voxcpm-0.5b",
             input,
             voice,
-            "response_format": "wav"
+            "response_format": "opus"
           })
         }) :
         await fetch(`${TTS_SERVER}/v1/audio/speech`, {
@@ -117,7 +123,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             "response_format": "wav"
           })
         });
-        if (!r.ok) throw new Error(`/synthesize failed: ${r.status} ${r.statusText}`);
+        if (!r.ok) {
+          sendResponse({ error: `/synthesize failed: ${r.status} ${r.statusText}` });
+          return;
+        }
         const buf = await r.arrayBuffer();
         const b64 = arrayBufferToBase64(buf);
         sendResponse({ ok: true, base64: b64 });
@@ -126,6 +135,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       if (msg.type === "tts.cancel") {
         fetch(`${TTS_SERVER}/v1/audio/speech/cancel`, { method: "POST" });
+        sendResponse({ ok: true });
         return;
       }
 

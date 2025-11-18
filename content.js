@@ -40,7 +40,8 @@
     statusEl: null,      // status label
     btnPlay: null,
     btnStop: null,
-    controls: null,      // buttons other than Play
+    btnNext: null,
+    controls: null,      // button group not including Play
     meta: [],            // [{el,start,end}] parallel to tts.texts[index]
     highlightSpan: null, // active <span> wrapper for current sentence
   };
@@ -142,10 +143,22 @@
     return task;
   }
 
+  function expectedDurationFromText(text) {
+    // const charsPerSecond = (ttsUIState.voice == '_helen') ? 12.5 :
+    //   (ttsUIState.voice == '_amy') ? 13.0 :
+    //   (ttsUIState.voice == '_denise') ? 13.0 :
+    //   (ttsUIState.voice == '_caroline') ? 13.0 :
+    //   (ttsUIState.voice == '_david') ? 13.5 :
+    //   15;
+    const charsPerSecond = 13.0;
+    return text.length / charsPerSecond;
+  }
+
   // Main playback scheduler
   async function scheduleAt(index) {
     const token = ++tts.playToken;
 
+    highlightCurrent(index);
     try {
       // Fetch and Wait for this segment's audio
       const cur = await fetchAndDecodeSegment(index);
@@ -178,15 +191,15 @@
         }
       };
 
-      highlightCurrent(index);
-
       // Start playback of this segment
       src.buffer = cur;
       src.connect(ctx.destination);
       // const t0 = ctx.currentTime; + 0.12;
-      src.start();
       tts.playing = true;
-
+      const expected = expectedDurationFromText(tts.texts[index]);
+      const maxDuration = expected * 1.0;
+      console.log('stop', maxDuration, 'duration', src.buffer.duration);
+      src.start(0, 0, maxDuration);
       setStatus(`Playing ${index + 1} / ${tts.segments.length}`);
       chrome.runtime.sendMessage({
         type: "tts.positionChanged",
@@ -216,7 +229,7 @@
     } catch (err) {
       console.error("Playback error:", err);
       setStatus(`Playback failed: ${err.message}`);
-      tts.playing = false;
+      tts.btnNext.click();
     }
   }
 
@@ -232,9 +245,9 @@
     tts.playing = false;
     tts.btnPlay.style.display = 'inherit';
     tts.controls.style.display = 'none';
-    if (tts.inFlight) {
+    if (tts.inFlight.size > 0) {
       tts.inFlight.clear();
-      chrome.runtime.sendMessage({ type: "tts.cancel" });
+      try { chrome.runtime.sendMessage({ type: "tts.cancel" }) } catch {}
     }
     setStatus("Ready");
   }
@@ -246,7 +259,7 @@
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg && msg.type === "toggleReader") toggle();
     });
-  } catch (_) {}
+  } catch {}
 
   window.addEventListener("keydown", (e) => {
     if (e.altKey && e.key.toLowerCase() === "r") { e.preventDefault(); toggle(); }
@@ -424,6 +437,7 @@
     tts.statusEl = container.querySelector("#rv-tts-status");
     tts.btnPlay = container.querySelector("#rv-tts-play");
     tts.btnStop = container.querySelector("#rv-tts-stop");
+    tts.btnNext = container.querySelector("#rv-tts-next");
     tts.controls = container.querySelector("#rv-tts-controls");
     setStatus("Ready");
 
@@ -533,8 +547,7 @@
     if (!window.Readability) { console.error("Readability not found. Inject readability.js first."); return; }
 
     const prefs = await loadPrefs();
-    document.querySelectorAll('script, modal, dialog, figure, header, footer, video, button, form, [aria-hidden]')
-      .forEach(el => el.remove());
+    document.querySelectorAll(`script, modal, form, [class*="hidden"]`).forEach(el => el.remove());
 
     const dom = new DOMParser().parseFromString(
       "<!doctype html>" + document.documentElement.outerHTML,
@@ -632,6 +645,9 @@
 
     // Segment sentences from article
     function segmentSentences(rootEl) {
+      // Minimum characters per chunk for TTS, where possible
+      const MIN_CHARS = 100;
+
       // Known abbreviations that should NOT end a sentence
       const ABBREV = new Set([
         "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",
@@ -651,14 +667,25 @@
       }
 
       const seg = new Intl.Segmenter(undefined, { granularity: "sentence" });
-      const BLOCKS = 'p, blockquote, li, h1, h2, h3, h4, h5, h6, div';
-      const scope = rootEl.querySelector('#rv-article-body');
+      const BLOCKS = "p, blockquote, li, h1, h2, h3, h4, h5, h6, div";
+      const bodySelectors = [
+        'section[name="articleBody"]', // NY Times
+        '#rv-article-body'             // ours
+      ];
+      let scope = null;
+      for (const selector of bodySelectors) {
+        const element = rootEl.querySelector(selector);
+        if (element) {
+          scope = element;
+          break;
+        }
+      }
       if (!scope) return { texts: [], meta: [] };
 
       // Leaf blocks only (avoid parent+child duplication)
-      const paras = Array.from(scope.querySelectorAll(
-        `:is(${BLOCKS}):not(:has(${BLOCKS}))`
-      ));
+      const paras = Array.from(
+        scope.querySelectorAll(`:is(${BLOCKS}):not(:has(${BLOCKS})):not(header *):not(footer *):not(caption *):not(figure *):not([aria-hidden] *)`)
+      );
       const texts = [];
       const meta = [];
 
@@ -667,7 +694,8 @@
         const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
         let plain = "";
         let nodes = [];
-        let pos = 0, n;
+        let pos = 0;
+        let n;
 
         while ((n = tw.nextNode())) {
           const val = (n.nodeValue || "").replace(/\r/g, ""); // normalize CR
@@ -694,40 +722,86 @@
         for (let i = 0; i < rawSegs.length; i++) {
           let cur = rawSegs[i];
 
-          while (endsWithAbbreviation(plain.slice(cur.start, cur.end)) && i + 1 < rawSegs.length) {
+          while (
+            endsWithAbbreviation(plain.slice(cur.start, cur.end)) &&
+            i + 1 < rawSegs.length
+          ) {
             // merge with next segment
             const nxt = rawSegs[i + 1];
             cur = {
               start: cur.start,
               end: nxt.end,
-              raw: plain.slice(cur.start, nxt.end)
+              raw: plain.slice(cur.start, nxt.end),
             };
             i++; // skip the next one
           }
           merged.push(cur);
         }
 
-        // 3rd pass: trim whitespace and push into final lists
+        // 3rd pass: trim whitespace on each merged sentence, but do NOT push yet
+        const cleanedSegs = [];
         for (const segm of merged) {
           const raw = plain.slice(segm.start, segm.end);
 
-          const lead = raw.match(/^\s*/) [0].length;
-          const trail = raw.match(/\s*$/)[0].length;
+          const leadMatch = raw.match(/^\s*/);
+          const trailMatch = raw.match(/\s*$/);
+          const lead = leadMatch ? leadMatch[0].length : 0;
+          const trail = trailMatch ? trailMatch[0].length : 0;
 
           const start = segm.start + lead;
-          const end   = segm.end - trail;
+          const end = segm.end - trail;
           if (end <= start) continue;
 
           const spoken = plain.slice(start, end).trim();
           if (!spoken) continue;
 
-          texts.push(spoken);
-          meta.push({ el, start, end });
+          cleanedSegs.push({ start, end });
+        }
+
+        // 4th pass: coalesce adjacent segments to reach MIN_CHARS where possible
+        let i = 0;
+        while (i < cleanedSegs.length) {
+          let groupStart = cleanedSegs[i].start;
+          let groupEnd = cleanedSegs[i].end;
+          let j = i + 1;
+
+          // If this element is short overall, do not bother merging
+          const elementTextLen = plain.trim().length;
+
+          if (elementTextLen >= MIN_CHARS) {
+            // Grow the group until we reach MIN_CHARS or run out of segments
+            while (
+              plain.slice(groupStart, groupEnd).trim().length < MIN_CHARS &&
+              j < cleanedSegs.length
+            ) {
+              groupEnd = cleanedSegs[j].end;
+              j++;
+            }
+          }
+
+          const rawChunk = plain.slice(groupStart, groupEnd);
+          const leadMatch = rawChunk.match(/^\s*/);
+          const trailMatch = rawChunk.match(/\s*$/);
+          const lead = leadMatch ? leadMatch[0].length : 0;
+          const trail = trailMatch ? trailMatch[0].length : 0;
+
+          const start = groupStart + lead;
+          const end = groupEnd - trail;
+          if (end > start) {
+            const spoken = plain.slice(start, end).trim();
+            if (spoken) {
+              texts.push(spoken);
+              meta.push({ el, start, end });
+            }
+          }
+
+          i = j;
         }
       }
 
       return { texts, meta };
     }
+
     // Prepare synthesis
     async function ensurePrepared() {
       if (ttsUIState.prepared && tts.segments?.length) return true;

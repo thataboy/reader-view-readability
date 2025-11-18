@@ -185,8 +185,11 @@ html.rv-active body {
     margin: 0 2px 0 4px;
 }
 .rv-tts-highlight{
-  background: rgba(200, 255, 50, .3);
+  background: rgba(200, 255, 50, .2);
   border-radius: 4px;
-  box-shadow: 2px 2px rgba(230, 255, 0, .65);
+  box-shadow: 2px 2px rgba(255, 150, 0, 0.8);
   transition: background .2s ease;
+}
+.rv-tts-reading{
+  box-shadow: 2px 2px rgba(200, 255, 50, 0.7);
 }

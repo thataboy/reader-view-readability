@@ -150,7 +150,7 @@
     //   (ttsUIState.voice == '_caroline') ? 13.0 :
     //   (ttsUIState.voice == '_david') ? 13.5 :
     //   15;
-    const charsPerSecond = 13.0;
+    const charsPerSecond = 12;
     return text.length / charsPerSecond;
   }
 
@@ -196,11 +196,13 @@
       src.connect(ctx.destination);
       // const t0 = ctx.currentTime; + 0.12;
       tts.playing = true;
-      const expected = expectedDurationFromText(tts.texts[index]);
-      const maxDuration = expected * 1.0;
-      console.log('stop', maxDuration, 'duration', src.buffer.duration);
+      const maxDuration = expectedDurationFromText(tts.texts[index]);
+      if (maxDuration < src.buffer.duration) {
+        console.log(`${maxDuration.toFixed(2)} < ${src.buffer.duration}`);
+      }
       src.start(0, 0, maxDuration);
       setStatus(`Playing ${index + 1} / ${tts.segments.length}`);
+      highlightReading();
       chrome.runtime.sendMessage({
         type: "tts.positionChanged",
         payload: { index }
@@ -227,7 +229,7 @@
       })().catch(() => {});
 
     } catch (err) {
-      console.error("Playback error:", err);
+      console.log("Playback error:", err);
       setStatus(`Playback failed: ${err.message}`);
       tts.btnNext.click();
     }
@@ -291,6 +293,7 @@
                target.classList.contains("rv-tts-highlight")) {
       // Case 2: fallback where we just added a class to an existing element
       target.classList.remove("rv-tts-highlight");
+      target.classList.remove("rv-tts-reading");
     }
 
     tts.highlightSpan = null;
@@ -336,6 +339,13 @@
       m.el.scrollIntoView({ block: "center", behavior: "smooth" });
     }
   }
+
+  function highlightReading() {
+    const target = tts.highlightSpan;
+    if (!target) return;
+    target.classList.add("rv-tts-reading");
+  }
+
 
   function offsetInElementFromPoint(el, clientX, clientY) {
     // Build a collapsed range at the click point

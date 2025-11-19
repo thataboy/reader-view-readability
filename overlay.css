@@ -84,9 +84,9 @@
     display: flex;
     flex-wrap: nowrap;
     align-items: center;
-    gap: 4px;
+    gap: 0 4px;
     margin-top: 3px;
-    padding: 2px 10px;
+    padding: 0 10px;
     background: var(--rv-panel);
     border: 1px solid var(--rv-border);
     backdrop-filter: saturate(120%) blur(6px);
@@ -100,7 +100,7 @@
     border: 1px solid var(--rv-border);
     background: var(--rv-button);
     border-radius: 6px;
-    padding: 2px 6px;
+    padding: 3px 8px;
     cursor: pointer;
     width: auto !important;
     min-width: 0 !important;
@@ -118,6 +118,11 @@
 #rv-toolbar .rv-group {
     display: inline-flex;
     gap: 4px;
+}
+#rv-toolbar .rv-radio {
+    display: inline-flex;
+    margin-left: 10px;
+    vertical-align: middle;
 }
 .rv-inline {
     display: inline-flex;
@@ -173,9 +178,13 @@ html.rv-active body {
     background: rgba(255, 255, 0, 0.3) !important;
     transition: background 0.3s ease;
 }
+#rv-toolbar label,
+#rv-toolbar select {
+    font-size: 14px;
+}
 #rv-tts-status,
 #rv-speed-label {
-    font-size: 12px;
+    font-size: 13px;
     color: var(--rv-fg);
     opacity: 0.9;
     margin-left: 8px;

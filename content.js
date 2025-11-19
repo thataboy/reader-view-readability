@@ -4,10 +4,23 @@
   window.__readerViewInstalled = true;
 
   // --------------------------
+  // Server definitionss
+  // --------------------------
+  const Server = Object.freeze({
+      MY_KOKORO: 1,
+      VOX_ANE: 2
+  });
+
+  const SERVER_NAME = new Map([
+    [Server.MY_KOKORO, 'Kokoro'],
+    [Server.VOX_ANE, 'Vox']
+  ]);
+
+  // --------------------------
   // Storage helpers
   // --------------------------
   const STORAGE_KEY = "rv_prefs_v1";
-  const defaults = { fontSize: 17, maxWidth: 860, voice: '', speed: 1.0 };
+  const defaults = { fontSize: 17, maxWidth: 860, voice: {}, speed: 1.0, server: Server.MY_KOKORO };
   async function loadPrefs() {
     try {
       const out = await chrome.storage.local.get(STORAGE_KEY);
@@ -23,9 +36,13 @@
   }
 
   // --------------------------
-  // TTS Playback State (moved from background)
+  // TTS Playback State
   // --------------------------
   const tts = {
+    prepared: false,
+    server: Server.MY_KOKORO,
+    voice: '',
+    speed: 1.0,
     audioCtx: null,
     segments: [],
     texts: [],
@@ -38,6 +55,7 @@
     prefetchAhead: 3,    // # TTS segments to prefetch
     keepBehind: 1,
     statusEl: null,      // status label
+    voiceEl: null,       // voice list control
     btnPlay: null,
     btnStop: null,
     btnNext: null,
@@ -45,7 +63,6 @@
     meta: [],            // [{el,start,end}] parallel to tts.texts[index]
     highlightSpan: null, // active <span> wrapper for current sentence
   };
-  let voices = [];
 
   function ttsKey(i){ return `seg:${i}`; }
   function ensureCtx() {
@@ -119,8 +136,9 @@
             type: "tts.synthesize",
             payload: {
               text: tts.texts[i],
-              voice: ttsUIState.voice,
-              speed: ttsUIState.speed
+              voice: tts.voice,
+              speed: tts.speed,
+              server: tts.server
             }
           })
         );
@@ -144,14 +162,14 @@
   }
 
   function expectedDurationFromText(text) {
-    // const charsPerSecond = (ttsUIState.voice == '_helen') ? 12.5 :
-    //   (ttsUIState.voice == '_amy') ? 13.0 :
-    //   (ttsUIState.voice == '_denise') ? 13.0 :
-    //   (ttsUIState.voice == '_caroline') ? 13.0 :
-    //   (ttsUIState.voice == '_david') ? 13.5 :
-    //   15;
-    const charsPerSecond = 12;
-    return text.length / charsPerSecond;
+    const charsPerSecond = (tts.voice == '_helen') ? 12.5 :
+      (tts.voice == '_jameson') ? 10.5 :
+      (tts.voice == '_denise') ? 13.0 :
+      (tts.voice == '_caroline') ? 13.0 :
+      (tts.voice == '_david') ? 13.5 :
+      (tts.voice == '_emily-11') ? 10.0 :
+      14;
+    return Math.max(1.5, text.length / charsPerSecond);
   }
 
   // Main playback scheduler
@@ -241,6 +259,7 @@
       if (tts.currentSrc) {
         tts.currentSrc.onended = null;
         tts.currentSrc.stop();
+        tts.currentSrc.close();
       }
     } catch {}
     tts.currentSrc = null;
@@ -249,7 +268,10 @@
     tts.controls.style.display = 'none';
     if (tts.inFlight.size > 0) {
       tts.inFlight.clear();
-      try { chrome.runtime.sendMessage({ type: "tts.cancel" }) } catch {}
+      try { chrome.runtime.sendMessage({
+        type: "tts.cancel",
+        payload: { server: tts.server }
+      }) } catch {}
     }
     setStatus("Ready");
   }
@@ -391,14 +413,15 @@
       <div id="rv-surface" role="dialog" aria-label="Reader View" tabindex="-1">
         <div id="rv-toolbar">
           <button class="rv-btn" id="rv-close" title="Close"><img></button>
-          <span class="rv-group">
+          <div class="rv-group">
             <button class="rv-btn" id="rv-font-inc" title="Increase font"><img></button>
             <button class="rv-btn" id="rv-font-dec" title="Decrease font"><img></button>
             <button class="rv-btn" id="rv-width-widen" title="Widen page"><img></button>
             <button class="rv-btn" id="rv-width-narrow" title="Narrow page"><img></button>
-          </span>
+          </div>
           <div class="rv-spacer">
-            <div id="rv-tts" style="margin-left:20px;display:flex;gap:6px;align-items:center">
+            <div id="rv-tts" style="margin-left:5px;display:flex;gap:4px;align-items:center">
+              <div id="rv-servers"></div>
               <select id="rv-voice" title="Voice"></select>
               <label class="rv-inline" title="Speed">
               <input id="rv-speed" type="range" min="0.7" max="1.5" step="0.05" value="1.0" />
@@ -432,8 +455,7 @@
   }
 
   function attachOverlay(container, prefs) {
-    const prior = document.getElementById("reader-view-overlay");
-    if (prior) prior.remove();
+    document.getElementById("reader-view-overlay")?.remove();
 
     const surface = container.querySelector("#rv-surface");
     const contentHost = container.querySelector("#rv-content");
@@ -442,8 +464,10 @@
     surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
     contentHost.style.setProperty("--rv-font-family", 'Verdana,Geneva,Helvetica,sans-serif');
     contentHost.style.setProperty("--rv-maxw", `${prefs.maxWidth}px`);
+    if (prefs.server && SERVER_NAME.get(prefs.server)) tts.server = prefs.server;
 
     // save status element
+    tts.voiceEl = container.querySelector("#rv-voice");
     tts.statusEl = container.querySelector("#rv-tts-status");
     tts.btnPlay = container.querySelector("#rv-tts-play");
     tts.btnStop = container.querySelector("#rv-tts-stop");
@@ -468,6 +492,7 @@
         try { tts.audioCtx.close(); } catch {}
       }
       tts.audioCtx = null;
+      tts.prepared = false;
       tts.segments = [];
       tts.texts = [];
       tts.index = 0;
@@ -556,7 +581,6 @@
     if (existing) { existing.querySelector("#rv-close")?.click(); return; }
     if (!window.Readability) { console.error("Readability not found. Inject readability.js first."); return; }
 
-    const prefs = await loadPrefs();
     document.querySelectorAll(`script, modal, form, [class*="hidden"]`).forEach(el => el.remove());
 
     const dom = new DOMParser().parseFromString(
@@ -568,6 +592,8 @@
 
     container = buildOverlay(article.content, article.title, article.byline);
 
+    const prefs = await loadPrefs();
+    tts.server = prefs.server;
     attachOverlay(container, prefs);
 
     // Set icons
@@ -587,10 +613,8 @@
   // --------------------------
   // TTS Controls
   // --------------------------
-  let ttsUIState = { prepared: false, voice: "", speed: 1.0 };
-
   function setupStaticTTSControls(overlay, contentHost, prefs) {
-    const voiceSel = overlay.querySelector("#rv-voice");
+    const voiceEl = overlay.querySelector("#rv-voice");
     const speedInp = overlay.querySelector("#rv-speed");
     const speedLabel = overlay.querySelector("#rv-speed-label");
     const btnPlay = overlay.querySelector("#rv-tts-play");
@@ -599,44 +623,74 @@
     const btnNext = overlay.querySelector("#rv-tts-next");
     const btnPrevP = overlay.querySelector("#rv-tts-prevp");
     const btnNextP = overlay.querySelector("#rv-tts-nextp");
-    if (!voiceSel || !speedInp) return;
+    if (!voiceEl || !speedInp) return;
 
-    async function loadVoicesInto(selectEl) {
+    const serversDiv = overlay.querySelector('#rv-servers');
+    for (const [serverValue, serverName] of SERVER_NAME.entries()) {
+      const radioInput = document.createElement('input');
+      radioInput.type = 'radio';
+      radioInput.id = `server-${serverValue}`;
+      radioInput.name = 'tts_server';
+      radioInput.value = serverValue;
+      radioInput.checked = serverValue == tts.server;
+      radioInput.className = 'rv-radio';
+
+      const radioLabel = document.createElement('label');
+      radioLabel.htmlFor = `server-${serverValue}`;
+      radioLabel.textContent = serverName;
+
+      serversDiv.appendChild(radioInput);
+      serversDiv.appendChild(radioLabel);
+
+      radioInput.addEventListener('change', (event) => {
+          if (event.target.checked) {
+              const newServer = parseInt(event.target.value, 10);
+              if (newServer == tts.server) return;
+              invalidateAudio(false);
+              tts.server = newServer;
+              prefs.server = newServer;
+              savePrefs(prefs);
+              loadVoiceList();
+          }
+      });
+    }
+
+    async function loadVoiceList() {
       // Fallback set if server fails (only used if fetch errors)
       const fallback = [ "ax_liam", "af_heart", "af_sky" ];
+      let voices = [];
       try {
-        if (voices.length == 0) {
-          const res = await chrome.runtime.sendMessage({ type: "tts.listVoices" });
-          if (!res?.ok) throw new Error(res?.error || "voices fetch failed");
-          voices = res.voices;
-        }
+        const res = await chrome.runtime.sendMessage({
+          type: "tts.listVoices",
+          payload: { server: tts.server }
+        });
+        if (!res?.ok) throw new Error(res?.error || "voices fetch failed");
+        voices = res.voices;
       } finally {
-        const current = prefs.voice;
-        selectEl.innerHTML = "";
+        tts.voiceEl.innerHTML = "";
         voices ||= fallback;
         for (const v of voices) {
           const opt = document.createElement("option");
           opt.value = v;
           opt.textContent = v;
-          selectEl.appendChild(opt);
+          tts.voiceEl.appendChild(opt);
         }
-        // If current is available, keep it; otherwise use first
-        const currentAvail = voices.some(v => v === current);
-        selectEl.value = currentAvail ? current : (voices[0] || "");
-        ttsUIState.voice = selectEl.value;
+        const preferred = prefs.voice[tts.server];
+        tts.voiceEl.value = voices.includes(preferred) ? preferred : (voices[0] || "");
+        tts.voice = tts.voiceEl.value;
       }
     }
 
-    loadVoicesInto(voiceSel);
+    loadVoiceList();
 
     speedInp.value = prefs.speed;
-    ttsUIState.speed = prefs.speed;
+    tts.speed = prefs.speed;
     speedLabel.textContent = `${speedInp.value}x`;
 
-    voiceSel.addEventListener("change", () => {
-      if (ttsUIState.voice !== voiceSel.value) {
-        ttsUIState.voice = voiceSel.value;
-        prefs.voice = voiceSel.value;
+    voiceEl.addEventListener("change", () => {
+      if (tts.voice !== voiceEl.value) {
+        tts.voice = voiceEl.value;
+        prefs.voice[tts.server] = voiceEl.value;
         savePrefs(prefs);
         invalidateAudio();
       }
@@ -644,8 +698,8 @@
 
     speedInp.addEventListener("input", () => {
       const newSpeed = parseFloat(speedInp.value);
-      if (ttsUIState.speed != newSpeed) {
-        ttsUIState.speed = newSpeed;
+      if (tts.speed != newSpeed) {
+        tts.speed = newSpeed;
         speedLabel.textContent = `${newSpeed}x`;
         prefs.speed = newSpeed;
         savePrefs(prefs);
@@ -656,7 +710,7 @@
     // Segment sentences from article
     function segmentSentences(rootEl) {
       // Minimum characters per chunk for TTS, where possible
-      const MIN_CHARS = 100;
+      const MIN_CHARS = (tts.server == Server.MY_KOKORO) ? 100 : 30;
 
       // Known abbreviations that should NOT end a sentence
       const ABBREV = new Set([
@@ -814,7 +868,7 @@
 
     // Prepare synthesis
     async function ensurePrepared() {
-      if (ttsUIState.prepared && tts.segments?.length) return true;
+      if (tts.prepared && tts.segments?.length) return true;
       setStatus("Preparing speech...");
 
       const { texts, meta } = segmentSentences(contentHost);
@@ -824,15 +878,15 @@
       tts.meta = meta;                    // parallel metadata
       tts.segments = new Array(texts.length).fill(0);
 
-      ttsUIState.prepared = true;
+      tts.prepared = true;
       tts.index = 0;
       setStatus(`Ready (${tts.segments.length} segments)`);
       return true;
     }
 
     function playAt(idx) {
-      if (idx < 0 || idx >= tts.segments.length) return;
       stopPlayback();
+      if (idx < 0 || idx >= tts.segments.length) return;
       tts.index = idx;
       highlightCurrent(idx);
       tts.playing = true;
@@ -841,15 +895,12 @@
       scheduleAt(idx);
     }
 
-    function invalidateAudio() {
-      tts.inFlight.clear();
-      tts.decoded.clear();
+    function invalidateAudio(continuePlay = false) {
       const wasPlaying = tts.playing;
       stopPlayback();
+      tts.decoded.clear();
       tts.playToken++;           // invalidate any pending onended
-      tts.currentSrc = null;
-      // drop audio artifacts
-      if (wasPlaying) playAt(tts.index);
+      if (wasPlaying && continuePlay) playAt(tts.index);
     }
 
     // Button handlers
@@ -889,7 +940,7 @@
     };
 
     btnPrevP.onclick = () => {
-      if (!ttsUIState.prepared || !tts.meta?.length) return;
+      if (!tts.prepared || !tts.meta?.length) return;
       // If index is unset, treat as 0
       let cur = Math.max(0, tts.index | 0);
       // move to start of current paragraph
@@ -906,7 +957,7 @@
     };
 
     btnNextP.onclick = () => {
-      if (!ttsUIState.prepared || !tts.meta?.length) return;
+      if (!tts.prepared || !tts.meta?.length) return;
 
       let cur = Math.max(0, tts.index | 0);
       // move to end of current paragraph

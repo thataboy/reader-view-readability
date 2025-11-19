@@ -1,14 +1,8 @@
 // background.js
 const Server = Object.freeze({
-    MY_KOKORO: 0,
-    VOX_ANE: 1,
-    VOX_API: 2
+    MY_KOKORO: 1,
+    VOX_ANE: 2
 });
-
-// const server = Server.MY_KOKORO;
-const server = Server.VOX_ANE;
-// const server = Server.VOX_API;
-
 
 // ----- Reader View Injection (unchanged) -----
 async function injectAndToggle(tabId) {
@@ -28,22 +22,22 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 });
 
 
-const TTS_SERVER =  (server == Server.MY_KOKORO) ? "http://127.0.0.1:9090" :
-                    (server == Server.VOX_ANE) ? "http://127.0.0.1:9000" :
-                    "http://127.0.0.1:8000";
+const TTS_SERVER = new Map([
+  [Server.MY_KOKORO, 'http://127.0.0.1:9090'],
+  [Server.VOX_ANE, 'http://127.0.0.1:9000']
+]);
 
 // Simple in-memory cache to avoid spamming the server
-let __voicesCache = null;
+let __voicesCache = new Map();
 
-async function fetchVoices() {
-  if (__voicesCache) return __voicesCache;
-  const pref = (server == Server.VOX_API) ? "v1/" : "";
-  const r = await fetch(`${TTS_SERVER}/${pref}voices`);
+async function fetchVoices(server) {
+  const v = __voicesCache.get(server);
+  if (v) return v;
+  const r = await fetch(`${TTS_SERVER.get(server)}/voices`);
   if (!r.ok) throw new Error(`/voices failed: ${r.status} ${r.statusText}`);
   const j = await r.json();
-  // console.log(j);
-  __voicesCache = (server !== Server.VOX_API) ? j.voices : j.voices.map(item => item.id);
-  return __voicesCache;
+  __voicesCache.set(server, j.voices);
+  return j.voices;
 }
 
 function arrayBufferToBase64(buffer) {
@@ -78,26 +72,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
       if (msg.type === "tts.listVoices") {
-        const list = await fetchVoices();
+        const { server } = msg.payload;
+        const list = await fetchVoices(server);
         sendResponse({ ok: true, voices: list });
         return;
       }
 
       if (msg.type === "tts.synthesize") {
-        const { text, voice, speed } = msg.payload || {};
+        const { text, voice, speed, server } = msg.payload || {};
         let input = (server == Server.VOX_ANE) ? sanitize(text) : text?.trim();
-        if (!input || server == Server.VOX_ANE && input.length < 10) {
+        if (!input || server == Server.VOX_ANE && input.length < 5) {
           sendResponse({ error: '/synthesize failed: Text empty or too short' });
           return
         }
         const r = (server == Server.MY_KOKORO) ?
-        await fetch(`${TTS_SERVER}/synthesize`, {
+        await fetch(`${TTS_SERVER.get(server)}/synthesize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ input, voice, speed })
         }) :
-        (server == Server.VOX_ANE) ?
-        await fetch(`${TTS_SERVER}/v1/audio/speech`, {
+        await fetch(`${TTS_SERVER.get(server)}/v1/audio/speech`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -105,22 +99,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             input,
             voice,
             "response_format": "opus"
-          })
-        }) :
-        await fetch(`${TTS_SERVER}/v1/audio/speech`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Prompt-Speech-Enhancement": "False",
-            "X-Text-Normalization": "True",
-            "X-CFG-Value": "2.5",
-            "X-Inference-Timesteps": "10"
-          },
-          body: JSON.stringify({
-            "model": "tts-1",
-            input,
-            voice,
-            "response_format": "wav"
           })
         });
         if (!r.ok) {
@@ -134,7 +112,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       if (msg.type === "tts.cancel") {
-        fetch(`${TTS_SERVER}/v1/audio/speech/cancel`, { method: "POST" });
+        const { server } = msg.payload;
+        fetch(`${TTS_SERVER.get(server)}/v1/audio/speech/cancel`, { method: "POST" });
         sendResponse({ ok: true });
         return;
       }

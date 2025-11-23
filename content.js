@@ -162,14 +162,18 @@
   }
 
   function expectedDurationFromText(text) {
-    const charsPerSecond = (tts.voice == '_helen') ? 12.5 :
-      (tts.voice == '_jameson') ? 10.5 :
-      (tts.voice == '_denise') ? 13.0 :
-      (tts.voice == '_caroline') ? 13.0 :
-      (tts.voice == '_david') ? 13.5 :
-      (tts.voice == '_emily-11') ? 10.0 :
-      14;
-    return Math.max(1.5, text.length / charsPerSecond);
+    // const charsPerSecond = (tts.voice == '_helen') ? 12.5 :
+    //   (tts.voice == '_jameson') ? 10.5 :
+    //   (tts.voice == '_denise') ? 13.0 :
+    //   (tts.voice == '_caroline') ? 13.0 :
+    //   (tts.voice == '_david') ? 10.0 :
+    //   (tts.voice == '_emily-11') ? 10.0 :
+    //   (tts.voice == '_emilyB-11') ? 10.0 :
+    //   (tts.voice == '_dorothy-11') ? 8.0 :
+    //   (tts.voice == '_scholar') ? 11.0 :
+    //   (tts.voice == '_thomas-11') ? 10.0 :
+    //   9.0;
+    return Math.max(2.0, text.length / 9.0);//charsPerSecond);
   }
 
   // Main playback scheduler
@@ -214,11 +218,15 @@
       src.connect(ctx.destination);
       // const t0 = ctx.currentTime; + 0.12;
       tts.playing = true;
-      const maxDuration = expectedDurationFromText(tts.texts[index]);
-      if (maxDuration < src.buffer.duration) {
-        console.log(`${maxDuration.toFixed(2)} < ${src.buffer.duration}`);
+      if (tts.server == Server.VOX_ANE) {
+        const maxDuration = expectedDurationFromText(tts.texts[index]);
+        if (maxDuration < src.buffer.duration) {
+          console.log(`${maxDuration.toFixed(2)} < ${src.buffer.duration}`);
+        }
+        src.start(0, 0, maxDuration);
+      } else {
+        src.start(0, 0);
       }
-      src.start(0, 0, maxDuration);
       setStatus(`Playing ${index + 1} / ${tts.segments.length}`);
       highlightReading();
       chrome.runtime.sendMessage({
@@ -254,7 +262,6 @@
   }
 
   function stopPlayback() {
-    // stop the current source, don’t close the context
     try {
       if (tts.currentSrc) {
         tts.currentSrc.onended = null;
@@ -266,13 +273,12 @@
     tts.playing = false;
     tts.btnPlay.style.display = 'inherit';
     tts.controls.style.display = 'none';
-    if (tts.inFlight.size > 0) {
-      tts.inFlight.clear();
-      try { chrome.runtime.sendMessage({
-        type: "tts.cancel",
-        payload: { server: tts.server }
-      }) } catch {}
-    }
+    tts.inFlight.clear();
+    // doesn't hurt to send cancel to server
+    try { chrome.runtime.sendMessage({
+      type: "tts.cancel",
+      payload: { server: tts.server }
+    }) } catch {}
     setStatus("Ready");
   }
 
@@ -657,15 +663,18 @@
 
     async function loadVoiceList() {
       // Fallback set if server fails (only used if fetch errors)
-      const fallback = [ "ax_liam", "af_heart", "af_sky" ];
+      const fallback = new Map([
+        [Server.MY_KOKORO, ["ax_liam", "af_heart", "af_kore"]],
+        [Server.VOX_ANE, ["_dorothy-11", "_mark"]]
+      ]);
       let voices = [];
       try {
         const res = await chrome.runtime.sendMessage({
           type: "tts.listVoices",
           payload: { server: tts.server }
         });
-        if (!res?.ok) throw new Error(res?.error || "voices fetch failed");
-        voices = res.voices;
+        if (res?.ok) voices = res.voices;
+        else console.log(res?.error || "voices fetch failed");
       } finally {
         tts.voiceEl.innerHTML = "";
         voices ||= fallback;
@@ -678,6 +687,12 @@
         const preferred = prefs.voice[tts.server];
         tts.voiceEl.value = voices.includes(preferred) ? preferred : (voices[0] || "");
         tts.voice = tts.voiceEl.value;
+        if (tts.server == Server.VOX_ANE && tts.voice) {
+          try { chrome.runtime.sendMessage({
+            type: "tts.warmup",
+            payload: { voice: tts.voice }
+          }) } catch {}
+        }
       }
     }
 
@@ -689,10 +704,17 @@
 
     voiceEl.addEventListener("change", () => {
       if (tts.voice !== voiceEl.value) {
+        const wasPlaying = tts.playing;
         tts.voice = voiceEl.value;
         prefs.voice[tts.server] = voiceEl.value;
         savePrefs(prefs);
         invalidateAudio();
+        if (!wasPlaying && tts.server == Server.VOX_ANE && tts.voice) {
+          try { chrome.runtime.sendMessage({
+            type: "tts.warmup",
+            payload: { voice: tts.voice }
+          }) } catch {}
+        }
       }
     });
 
@@ -709,14 +731,14 @@
 
     // Segment sentences from article
     function segmentSentences(rootEl) {
-      // Minimum characters per chunk for TTS, where possible
       const MIN_CHARS = (tts.server == Server.MY_KOKORO) ? 100 : 30;
+      const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 250 : 500;
 
       // Known abbreviations that should NOT end a sentence
       const ABBREV = new Set([
         "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",
-        "No", "Fig", "Rev",
-        "U.S", "U.K", "a.m", "p.m", "e.g", "i.e", "etc", "vs", "cf",
+        "No", "Fig", "Rev", "Capt", "Sgt", "Col", "Adm",
+        "U.S", "U.K", "A.M", "P.M", "a.m", "p.m", "e.g", "i.e", "etc", "Vs", "vs", "cf",
         "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug",
         "Sep", "Sept", "Oct", "Nov", "Dec",
       ]);
@@ -724,10 +746,46 @@
       // Helper: does segment end with an abbreviation?
       function endsWithAbbreviation(str) {
         // Strip trailing quotes/paren
-        const cleaned = str.trim().replace(/['"”’)\]]+$/, "");
-        const m = cleaned.match(/([A-Za-z]+)\.$/);
+        const cleaned = str.trim(); //.replace(/['"”’)\]]+$/, "");
+        if (cleaned.match(/[^A-Z.]([A-Z]\.)+$/)) return true;
+        const m = cleaned.match(/[^A-Za-z.]([A-Za-z.]+)\.$/);
         if (!m) return false;
         return ABBREV.has(m[1]);
+      }
+
+      // Helper: choose a split index (within str) for Vox long chunks.
+      // Only split at ",", ";" or "--" near the middle. If nothing found, return -1.
+      function chooseVoxSplitIndex(str) {
+        const len = str.length;
+        if (len < 2) return -1;
+
+        const mid = Math.floor(len / 2);
+
+        const isGoodPunctBoundary = (i) => {
+          // we split "after" i - 1
+          const prev = str[i - 1];
+          const prev2 = str[i - 2];
+          if ([',', ';', ')', '—'].includes(prev)) return true;
+          if (prev === '-' && prev2 === '-') return true; // "--"
+          return false;
+        };
+
+        const maxOffset = Math.floor(len * 0.25); // search in middle 50 percent band
+
+        for (let off = 0; off <= maxOffset; off++) {
+          const left = mid - off;
+          const right = mid + off;
+
+          if (left > 1 && left < len && isGoodPunctBoundary(left)) {
+            return left;
+          }
+          if (right > 1 && right < len && isGoodPunctBoundary(right)) {
+            return right;
+          }
+        }
+
+        // no suitable punctuation found
+        return -1;
       }
 
       const seg = new Intl.Segmenter(undefined, { granularity: "sentence" });
@@ -748,10 +806,30 @@
 
       // Leaf blocks only (avoid parent+child duplication)
       const paras = Array.from(
-        scope.querySelectorAll(`:is(${BLOCKS}):not(:has(${BLOCKS})):not(header *):not(footer *):not(caption *):not(figure *):not([aria-hidden] *)`)
+        scope.querySelectorAll(
+          `:is(${BLOCKS}):not(:has(${BLOCKS})):not(header *):not(footer *):not(caption *):not(figure *):not([aria-hidden] *)`
+        )
       );
       const texts = [];
       const meta = [];
+
+      function emitChunk(plain, el, start, end) {
+        const raw = plain.slice(start, end);
+        const leadMatch = raw.match(/^\s*/);
+        const trailMatch = raw.match(/\s*$/);
+        const lead = leadMatch ? leadMatch[0].length : 0;
+        const trail = trailMatch ? trailMatch[0].length : 0;
+
+        const s = start + lead;
+        const e = end - trail;
+        if (e <= s) return;
+
+        const spoken = plain.slice(s, e).trim();
+        if (!spoken) return;
+
+        texts.push(spoken);
+        meta.push({ el, start: s, end: e });
+      }
 
       for (const el of paras) {
         // 1) Build "plain" from actual text nodes so offsets match Range/TreeWalker
@@ -802,7 +880,7 @@
           merged.push(cur);
         }
 
-        // 3rd pass: trim whitespace on each merged sentence, but do NOT push yet
+        // 3rd pass: trim whitespace on each merged sentence, but DO NOT push yet
         const cleanedSegs = [];
         for (const segm of merged) {
           const raw = plain.slice(segm.start, segm.end);
@@ -843,20 +921,23 @@
             }
           }
 
-          const rawChunk = plain.slice(groupStart, groupEnd);
-          const leadMatch = rawChunk.match(/^\s*/);
-          const trailMatch = rawChunk.match(/\s*$/);
-          const lead = leadMatch ? leadMatch[0].length : 0;
-          const trail = trailMatch ? trailMatch[0].length : 0;
+          const chunkStr = plain.slice(groupStart, groupEnd).trim();
 
-          const start = groupStart + lead;
-          const end = groupEnd - trail;
-          if (end > start) {
-            const spoken = plain.slice(start, end).trim();
-            if (spoken) {
-              texts.push(spoken);
-              meta.push({ el, start, end });
+          if (MAX_CHARS && chunkStr.length > MAX_CHARS) {
+            const rel = chooseVoxSplitIndex(chunkStr);
+            if (rel > 0 && rel < chunkStr.length) {
+              const splitAbs = groupStart + rel;
+              // first half
+              emitChunk(plain, el, groupStart, splitAbs);
+              // second half
+              emitChunk(plain, el, splitAbs, groupEnd);
+            } else {
+              // no good punctuation to split on; keep as one
+              emitChunk(plain, el, groupStart, groupEnd);
             }
+          } else {
+            // non Vox or short enough
+            emitChunk(plain, el, groupStart, groupEnd);
           }
 
           i = j;
@@ -895,7 +976,7 @@
       scheduleAt(idx);
     }
 
-    function invalidateAudio(continuePlay = false) {
+    function invalidateAudio(continuePlay = true) {
       const wasPlaying = tts.playing;
       stopPlayback();
       tts.decoded.clear();

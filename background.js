@@ -51,15 +51,24 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
+// fix a bunch of weird quirks with VoxCPM
 function sanitize(text) {
+  text = text?.trim();
   if (!text) return null;
-  return text.replace(/[–()[\]|~`‘“”/!]/g, ' ')
-    .replace(/(\.|\*|\-){3,}/g, '.').replace(/’/g, "'").replace(/[—:;]/g, ', ')
+  return text
+    .replace(/[()[\]|~`/]/g, ' ')
+    .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+    .replace(/(\.|\*|\-){3,}/g, ' ')
+    // .replace(/[—:;]/g, ', ')
     // .replace(/[^\n\x20-\x7E]/g, ' ').replace(/ +/g, ' ').trim();
-    .replace(/\s+/g, ' ')
     .replace(/([,.])\s*[.,]/g, '$1 ')
-    .replace(/\s*([,.])/g, '$1').trim()
-    .replace(/^[,.]\s*/, '').replace(/(\s*[,.]\s*)+$/, '.');
+    .replace(/^[,.]\s*/, '')
+    .replace(/(\s*(\.))+$/, '$1')
+    .replace(/(\s*,)+$/, '')
+    .replace(/\s+([,.])/g, '$1')
+    .replace(/([.,])["”’')\]]$/, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -98,7 +107,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             "model": "voxcpm-0.5b",
             input,
             voice,
-            "response_format": "opus"
+            "inference_timesteps": 10,
+            "response_format": "wav"
           })
         });
         if (!r.ok) {
@@ -113,12 +123,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       if (msg.type === "tts.cancel") {
         const { server } = msg.payload;
-        fetch(`${TTS_SERVER.get(server)}/v1/audio/speech/cancel`, { method: "POST" });
+        try {
+          fetch(`${TTS_SERVER.get(server)}/v1/audio/speech/cancel`, { method: "POST" });
+        } catch {}
         sendResponse({ ok: true });
         return;
       }
 
-      // 3) No-op controls
+      if (msg.type === "tts.warmup") {
+        const { voice } = msg.payload;
+        fetch(`${TTS_SERVER.get(Server.VOX_ANE)}/v1/audio/speech`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            "model": "voxcpm-0.5b",
+            "input": "Okey dokey.",
+            voice,
+            "inference_timesteps": 10,
+            "response_format": "wav"
+          })
+        });
+        sendResponse({ ok: true });
+        return;
+      }
+
+      // No-op controls
       if (["tts.play", "tts.pause", "tts.stop", "tts.jumpTo"].includes(msg.type)) {
         sendResponse({ ok: true });
         return;
@@ -126,8 +155,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       sendResponse({ ok: false, error: "Unknown message type" });
     } catch (err) {
-      console.error("TTS error:", err);
-      // For segment fetches, the content side expects either ArrayBuffer or {error}
       sendResponse({ error: String(err?.message || err) });
     }
   })();

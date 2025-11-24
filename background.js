@@ -133,27 +133,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg.type === "tts.synthesize") {
         const { text, voice, speed, server } = msg.payload || {};
         let input = (server == Server.VOX_ANE) ? sanitize(text) : text?.trim();
-        if (!input || (server == Server.VOX_ANE && input.length < 5)) {
+        if (!input || server == Server.VOX_ANE && input.length < 5) {
           sendResponse({ error: '/synthesize failed: Text empty or too short' });
           return;
         }
 
+        let r;
         if (server == Server.MY_KOKORO) {
-          const r = await fetch(`${TTS_SERVER.get(server)}/synthesize`, {
+          r = await fetch(`${TTS_SERVER.get(server)}/stream`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ input, voice, speed })
           });
-          if (!r.ok) {
-            sendResponse({ error: `/synthesize failed: ${r.status} ${r.statusText}` });
-            return;
-          }
-          const buf = await r.arrayBuffer();
-          const b64 = arrayBufferToBase64(buf);
-          sendResponse({ ok: true, base64: b64 });
-          return;
-        } else if (server == Server.VOX_ANE) {
-          const r = await fetch(`${TTS_SERVER.get(server)}/v1/audio/speech/stream`, {
+        } else { // if (server == Server.VOX_ANE) {
+          r = await fetch(`${TTS_SERVER.get(server)}/v1/audio/speech/stream`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -164,54 +157,48 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
               response_format: "pcm"
             })
           });
+        }
 
-          if (!r.ok) {
-            sendResponse({ error: `/synthesize failed: ${r.status} ${r.statusText}` });
-            return;
-          }
-
-          const sampleRateHeader = r.headers.get("X-Sample-Rate");
-          const sampleRate = sampleRateHeader ? parseInt(sampleRateHeader, 10) : 24000;
-
-          const reader = r.body && r.body.getReader ? r.body.getReader() : null;
-          if (!reader) {
-            sendResponse({ error: "/synthesize failed: streaming body not available" });
-            return;
-          }
-          console.log(input);
-          const chunks = [];
-          let total = 0;
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (value && value.length) {
-              console.log(`chunk ${value.length}`);
-              chunks.push(value);
-              total += value.length;
-            }
-          }
-
-          if (!total) {
-            sendResponse({ error: "/synthesize failed: empty audio stream" });
-            return;
-          }
-          console.log(`total ${total}`);
-
-          const pcmBytes = new Uint8Array(total);
-          let offset = 0;
-          for (const c of chunks) {
-            pcmBytes.set(c, offset);
-            offset += c.length;
-          }
-
-          const wavBuffer = pcmBytesToWav(pcmBytes, sampleRate);
-          const b64 = arrayBufferToBase64(wavBuffer);
-          sendResponse({ ok: true, base64: b64 });
+        if (!r.ok) {
+          sendResponse({ error: `/synthesize failed: ${r.status} ${r.statusText}` });
           return;
         }
 
-        // Should not reach here
-        sendResponse({ error: "/synthesize failed: unknown server" });
+        const sampleRateHeader = r.headers.get("X-Sample-Rate");
+        const sampleRate = sampleRateHeader ? parseInt(sampleRateHeader, 10) : 24000;
+
+        const reader = r.body && r.body.getReader ? r.body.getReader() : null;
+        if (!reader) {
+          sendResponse({ error: "/synthesize failed: streaming body not available" });
+          return;
+        }
+
+        const chunks = [];
+        let total = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value && value.length) {
+            chunks.push(value);
+            total += value.length;
+          }
+        }
+
+        if (!total) {
+          sendResponse({ error: "/synthesize failed: empty audio stream" });
+          return;
+        }
+
+        const pcmBytes = new Uint8Array(total);
+        let offset = 0;
+        for (const c of chunks) {
+          pcmBytes.set(c, offset);
+          offset += c.length;
+        }
+
+        const wavBuffer = pcmBytesToWav(pcmBytes, sampleRate);
+        const b64 = arrayBufferToBase64(wavBuffer);
+        sendResponse({ ok: true, base64: b64 });
         return;
       }
 

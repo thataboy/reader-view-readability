@@ -185,7 +185,7 @@
       // Fetch and Wait for this segment's audio
       const cur = await fetchAndDecodeSegment(index);
       // If something changed (voice/jump/stop) while we were waiting, bail
-      if (!tts.playing || !tts.segments.length) return;
+      if (!tts.playing || !tts.segments.length || token != tts.playToken) return;
 
       tts.index = index;
       const ctx = ensureCtx();
@@ -687,12 +687,12 @@
         const preferred = prefs.voice[tts.server];
         tts.voiceEl.value = voices.includes(preferred) ? preferred : (voices[0] || "");
         tts.voice = tts.voiceEl.value;
-        if (tts.server == Server.VOX_ANE && tts.voice) {
-          try { chrome.runtime.sendMessage({
-            type: "tts.warmup",
-            payload: { voice: tts.voice }
-          }) } catch {}
-        }
+        // if (tts.server == Server.VOX_ANE && tts.voice) {
+        //   try { chrome.runtime.sendMessage({
+        //     type: "tts.warmup",
+        //     payload: { voice: tts.voice }
+        //   }) } catch {}
+        // }
       }
     }
 
@@ -709,12 +709,12 @@
         prefs.voice[tts.server] = voiceEl.value;
         savePrefs(prefs);
         invalidateAudio();
-        if (!wasPlaying && tts.server == Server.VOX_ANE && tts.voice) {
-          try { chrome.runtime.sendMessage({
-            type: "tts.warmup",
-            payload: { voice: tts.voice }
-          }) } catch {}
-        }
+        // if (!wasPlaying && tts.server == Server.VOX_ANE && tts.voice) {
+        //   try { chrome.runtime.sendMessage({
+        //     type: "tts.warmup",
+        //     payload: { voice: tts.voice }
+        //   }) } catch {}
+        // }
       }
     });
 
@@ -731,8 +731,8 @@
 
     // Segment sentences from article
     function segmentSentences(rootEl) {
-      const MIN_CHARS = (tts.server == Server.MY_KOKORO) ? 100 : 30;
-      const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 500 : 500;
+      const MIN_CHARS = (tts.server == Server.MY_KOKORO) ? 100 : 150;
+      const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 300 : 500;
 
       // Known abbreviations that should NOT end a sentence
       const ABBREV = new Set([

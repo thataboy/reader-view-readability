@@ -52,7 +52,7 @@
     inFlight: new Map(),
     currentSrc: null,
     playToken: 0,
-    prefetchAhead: 3,    // # TTS segments to prefetch
+    prefetchAhead: 4,    // # TTS segments to prefetch
     keepBehind: 1,
     statusEl: null,      // status label
     voiceEl: null,       // voice list control
@@ -173,7 +173,7 @@
     //   (tts.voice == '_scholar') ? 11.0 :
     //   (tts.voice == '_thomas-11') ? 10.0 :
     //   9.0;
-    return Math.max(2.0, text.length / 9.0);//charsPerSecond);
+    return Math.max(2.0, text.length / 10.0);//charsPerSecond);
   }
 
   // Main playback scheduler
@@ -732,7 +732,7 @@
     // Segment sentences from article
     function segmentSentences(rootEl) {
       const MIN_CHARS = (tts.server == Server.MY_KOKORO) ? 100 : 30;
-      const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 250 : 500;
+      const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 500 : 500;
 
       // Known abbreviations that should NOT end a sentence
       const ABBREV = new Set([

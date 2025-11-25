@@ -112,7 +112,7 @@
     return next;
   }
   // Fetch + decode a segment through background proxy
-  async function fetchAndDecodeSegment(i) {
+  async function fetchAndDecodeSegment(i, stream=true) {
     const k = ttsKey(i);
 
     const text = tts.texts[i];
@@ -128,12 +128,13 @@
     // 3) New synth task for this index
     const task = (async () => {
       try {
-        setStatus(`Text→Speech ${i + 1} / ${tts.segments.length} ...`);
+        setStatus(`T→S ${i + 1} / ${tts.segments.length} ...`);
 
         // Only one synth at a time goes through this lock
         const response = await withSynthLock(() =>
           chrome.runtime.sendMessage({
-            type: "tts.synthesize",
+            // type: "tts.synthesize",
+            type: (stream) ? "tts.stream" : "tts.synthesize",
             payload: {
               text: tts.texts[i],
               voice: tts.voice,
@@ -183,7 +184,7 @@
     highlightCurrent(index);
     try {
       // Fetch and Wait for this segment's audio
-      const cur = await fetchAndDecodeSegment(index);
+      const cur = await fetchAndDecodeSegment(index, true);
       // If something changed (voice/jump/stop) while we were waiting, bail
       if (!tts.playing || !tts.segments.length || token != tts.playToken) return;
 
@@ -587,7 +588,7 @@
     if (existing) { existing.querySelector("#rv-close")?.click(); return; }
     if (!window.Readability) { console.error("Readability not found. Inject readability.js first."); return; }
 
-    document.querySelectorAll(`script, modal, form, [class*="hidden"]`).forEach(el => el.remove());
+    document.querySelectorAll(`script, dialog, modal, form, [class*="hidden"]`).forEach(el => el.remove());
 
     const dom = new DOMParser().parseFromString(
       "<!doctype html>" + document.documentElement.outerHTML,
@@ -631,6 +632,9 @@
     const btnNextP = overlay.querySelector("#rv-tts-nextp");
     if (!voiceEl || !speedInp) return;
 
+    speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
+    speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
+
     const serversDiv = overlay.querySelector('#rv-servers');
     for (const [serverValue, serverName] of SERVER_NAME.entries()) {
       const radioInput = document.createElement('input');
@@ -655,6 +659,8 @@
               invalidateAudio(false);
               tts.server = newServer;
               prefs.server = newServer;
+              speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
+              speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
               savePrefs(prefs);
               loadVoiceList();
           }
@@ -731,14 +737,14 @@
 
     // Segment sentences from article
     function segmentSentences(rootEl) {
-      const MIN_CHARS = (tts.server == Server.MY_KOKORO) ? 100 : 150;
-      const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 300 : 500;
+      const MIN_CHARS = (tts.server == Server.VOX_ANE) ? 75 : 150;
+      const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 500 : 500;
 
       // Known abbreviations that should NOT end a sentence
       const ABBREV = new Set([
         "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",
-        "No", "Fig", "Rev", "Capt", "Sgt", "Col", "Adm",
-        "U.S", "U.K", "A.M", "P.M", "a.m", "p.m", "e.g", "i.e", "etc", "Vs", "vs", "cf",
+        "No", "Fig", "Rev", "Sen", "Capt", "Sgt", "Col", "Adm",
+        "U.S", "U.K", "A.M", "P.M", "a.m", "p.m", "e.g", "i.e", "Vs", "vs", "cf",
         "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug",
         "Sep", "Sept", "Oct", "Nov", "Dec",
       ]);
@@ -765,7 +771,7 @@
           // we split "after" i - 1
           const prev = str[i - 1];
           const prev2 = str[i - 2];
-          if ([',', ';', ')', '—'].includes(prev)) return true;
+          if ([',', ';', '—'].includes(prev)) return true;
           if (prev === '-' && prev2 === '-') return true; // "--"
           return false;
         };
@@ -1016,8 +1022,7 @@
     };
 
     btnNext.onclick = () => {
-      const idx = Math.min(tts.segments.length - 1, (tts.index >= 0 ? tts.index : -1) + 1);
-      playAt(idx);
+      if (tts.index + 1 < tts.segments.length) playAt(tts.index + 1);
     };
 
     btnPrevP.onclick = () => {

@@ -177,12 +177,15 @@ html.rv-active body {
     background: rgba(255, 255, 0, 0.3) !important;
     transition: background 0.3s ease;
 }
-#rv-toolbar label,
 #rv-toolbar select {
+    width: auto;
+    height: auto;
     font-size: 14px;
 }
 #rv-toolbar label {
-    margin: 0 8px;
+    font-size: 14px;
+    margin-left: 2px;
+    margin-right: 10px;
 }
 #rv-tts-status,
 #rv-speed-label {
@@ -192,7 +195,8 @@ html.rv-active body {
 }
 #rv-speed-label {
     width: 3em;
-    margin: 0 2px 0 4px;
+    margin-left: 4px;
+    margin-right: 2px;
 }
 .rv-tts-highlight{
   background: rgba(200, 255, 50, .2);

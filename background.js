@@ -100,16 +100,16 @@ function sanitize(text) {
   if (!text) return null;
   return text
     .replace(/[()[\]|~`/]/g, ' ')
-    .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+    // .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
     .replace(/(\.|\*|\-){3,}/g, ' ')
     // .replace(/[—:;]/g, ', ')
     // .replace(/[^\n\x20-\x7E]/g, ' ').replace(/ +/g, ' ').trim();
     .replace(/([,.])\s*[.,]/g, '$1 ')
     .replace(/^[,.]\s*/, '')
     .replace(/(\s*(\.))+$/, '$1')
-    .replace(/(\s*,)+$/, '')
     .replace(/\s+([,.])/g, '$1')
     .replace(/([.,])["”’')\]]$/, '$1')
+    .replace(/(\s*[,!])+$/, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -131,6 +131,40 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       if (msg.type === "tts.synthesize") {
+        const { text, voice, speed, server } = msg.payload || {};
+        let input = (server == Server.VOX_ANE) ? sanitize(text) : text?.trim();
+        if (!input || server == Server.VOX_ANE && input.length < 5) {
+          sendResponse({ error: '/synthesize failed: Text empty or too short' });
+          return
+        }
+        const r = (server == Server.MY_KOKORO) ?
+        await fetch(`${TTS_SERVER.get(server)}/synthesize`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ input, voice, speed })
+        }) :
+        await fetch(`${TTS_SERVER.get(server)}/v1/audio/speech`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            "model": "voxcpm-0.5b",
+            input,
+            voice,
+            "inference_timesteps": 10,
+            "response_format": "ogg"
+          })
+        });
+        if (!r.ok) {
+          sendResponse({ error: `/synthesize failed: ${r.status} ${r.statusText}` });
+          return;
+        }
+        const buf = await r.arrayBuffer();
+        const b64 = arrayBufferToBase64(buf);
+        sendResponse({ ok: true, base64: b64 });
+        return;
+      }
+
+      if (msg.type === "tts.stream") {
         const { text, voice, speed, server } = msg.payload || {};
         let input = (server == Server.VOX_ANE) ? sanitize(text) : text?.trim();
         if (!input || server == Server.VOX_ANE && input.length < 5) {

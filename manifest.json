@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Readability + Kokoro",
+  "name": "Readability + TTS",
   "version": "1.0.0",
-  "description": "Xibi's reader view using readability.js + Kokoro TTS",
+  "description": "Xibi's reader view using readability.js + TTS",
   "permissions": [
     "activeTab",
     "scripting",

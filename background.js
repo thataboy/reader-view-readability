@@ -30,12 +30,12 @@ const TTS_SERVER = new Map([
 let __voicesCache = new Map();
 
 async function fetchVoices(server) {
-  const v = __voicesCache.get(server);
-  if (v) return v;
+  // const v = __voicesCache.get(server);
+  // if (v) return v;
   const r = await fetch(`${TTS_SERVER.get(server)}/voices`);
   if (!r.ok) throw new Error(`/voices failed: ${r.status} ${r.statusText}`);
   const j = await r.json();
-  __voicesCache.set(server, j.voices);
+  // __voicesCache.set(server, j.voices);
   return j.voices;
 }
 
@@ -99,17 +99,24 @@ function sanitize(text) {
   text = text?.trim();
   if (!text) return null;
   return text
-    .replace(/[()[\]|~`/]/g, ' ')
+    .replace(/[()[\]|~`/—…]/g, ' ')
+    .replace(/\-/g, ' ')
     // .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+    .replace(/[“”"]/g, ' ')
+    .replace(/[‘’]/g, "'")
     .replace(/(\.|\*|\-){3,}/g, ' ')
+    // .replace(/-(?![a-zA-Z])|(?<![a-zA-Z])-/g, ' ')
     // .replace(/[—:;]/g, ', ')
     // .replace(/[^\n\x20-\x7E]/g, ' ').replace(/ +/g, ' ').trim();
     .replace(/([,.])\s*[.,]/g, '$1 ')
     .replace(/^[,.]\s*/, '')
     .replace(/(\s*(\.))+$/, '$1')
     .replace(/\s+([,.])/g, '$1')
-    .replace(/([.,])["”’')\]]$/, '$1')
-    .replace(/(\s*[,!])+$/, '')
+    .replace(/(["”’'])\s*\.\s*$/, '$1')
+    .replace(/\s+([”’])/g, '$1')
+    .replace(/([‘“])\s+/g, '$1')
+    .replace(/(\s*[,!:;]\s*)+$/, '')
+    .replace(/^(\s*[,!:;]\s*)+/, '')
     .replace(/\s+/g, ' ')
     .trim();
 }

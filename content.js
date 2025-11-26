@@ -64,7 +64,8 @@
     highlightSpan: null, // active <span> wrapper for current sentence
   };
 
-  function ttsKey(i){ return `seg:${i}`; }
+  function sig(){ return `${tts.server}:${tts.voice}:${tts.speed}`; }
+  function ttsKey(i){ return `${sig()}:${i}`; }
   function ensureCtx() {
     if (!tts.audioCtx || tts.audioCtx.state === "closed") {
       tts.audioCtx = new (AudioContext || webkitAudioContext)({ sampleRate: 24000 });
@@ -112,7 +113,8 @@
     return next;
   }
   // Fetch + decode a segment through background proxy
-  async function fetchAndDecodeSegment(i, stream=true) {
+  async function fetchAndDecodeSegment(i, signature, stream) {
+
     const k = ttsKey(i);
 
     const text = tts.texts[i];
@@ -121,20 +123,19 @@
     if (tts.decoded.has(k)) return tts.decoded.get(k);
 
     // 2) Already in flight for this index: reuse its Promise
-    if (tts.inFlight.has(i)) {
-      return tts.inFlight.get(i);
-    }
+    if (tts.inFlight.has(k)) return tts.inFlight.get(k);
 
     // 3) New synth task for this index
     const task = (async () => {
       try {
         setStatus(`T→S ${i + 1} / ${tts.segments.length} ...`);
 
+        if (signature != sig()) throw new Error("Mismatched signature");
         // Only one synth at a time goes through this lock
         const response = await withSynthLock(() =>
           chrome.runtime.sendMessage({
-            // type: "tts.synthesize",
-            type: (stream) ? "tts.stream" : "tts.synthesize",
+            type: "tts.synthesize",
+            // type: (stream) ? "tts.stream" : "tts.synthesize",
             payload: {
               text: tts.texts[i],
               voice: tts.voice,
@@ -145,6 +146,7 @@
         );
 
         if (!response?.ok) throw new Error(response?.error || "Synthesis failed");
+        if (signature != sig()) throw new Error("Unmatched signature");
 
         const buf = base64ToArrayBuffer(response.base64);
         const ab = await decodeBuffer(i, buf);
@@ -154,11 +156,11 @@
         setStatus(`Error: ${err.message}`);
         throw err;
       } finally {
-        tts.inFlight.delete(i);
+        tts.inFlight.delete(k);
       }
     })();
 
-    tts.inFlight.set(i, task);
+    tts.inFlight.set(k, task);
     return task;
   }
 
@@ -184,7 +186,7 @@
     highlightCurrent(index);
     try {
       // Fetch and Wait for this segment's audio
-      const cur = await fetchAndDecodeSegment(index, true);
+      const cur = await fetchAndDecodeSegment(index, sig(), true);
       // If something changed (voice/jump/stop) while we were waiting, bail
       if (!tts.playing || !tts.segments.length || token != tts.playToken) return;
 
@@ -220,7 +222,7 @@
       // const t0 = ctx.currentTime; + 0.12;
       tts.playing = true;
       if (tts.server == Server.VOX_ANE) {
-        const maxDuration = expectedDurationFromText(tts.texts[index]);
+        const maxDuration = Math.max(3.0, expectedDurationFromText(tts.texts[index]));
         if (maxDuration < src.buffer.duration) {
           console.log(`${maxDuration.toFixed(2)} < ${src.buffer.duration}`);
         }
@@ -241,8 +243,9 @@
         const end = Math.min(tts.segments.length - 1, index + tts.prefetchAhead);
         const fetches = [];
         for (let i = start; i <= end; i++) {
-          if (!tts.decoded.has(ttsKey(i)) && !tts.inFlight.has(i)) {
-            fetches.push(fetchAndDecodeSegment(i).catch(() => {}));
+          const k = ttsKey(i);
+          if (!tts.decoded.has(k) && !tts.inFlight.has(k)) {
+            fetches.push(fetchAndDecodeSegment(i, sig(), false).catch(() => {}));
           }
         }
         await Promise.all(fetches);
@@ -434,7 +437,7 @@
               <input id="rv-speed" type="range" min="0.7" max="1.5" step="0.05" value="1.0" />
               </label>
               <span id="rv-speed-label"></span>
-              <button class="rv-btn" id="rv-tts-play" title="Play"><img></button>
+              <button class="rv-btn" id="rv-tts-play" title="Speak"><img></button>
               <div id="rv-tts-controls" style="display:none">
               <button class="rv-btn" id="rv-tts-stop" title="Stop"><img></button>
               <button class="rv-btn" id="rv-tts-prevp" title="Previous paragraph"><img></button>
@@ -710,7 +713,7 @@
 
     voiceEl.addEventListener("change", () => {
       if (tts.voice !== voiceEl.value) {
-        const wasPlaying = tts.playing;
+        // const wasPlaying = tts.playing;
         tts.voice = voiceEl.value;
         prefs.voice[tts.server] = voiceEl.value;
         savePrefs(prefs);
@@ -737,9 +740,8 @@
 
     // Segment sentences from article
     function segmentSentences(rootEl) {
-      const MIN_CHARS = (tts.server == Server.VOX_ANE) ? 75 : 150;
-      const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 500 : 500;
-
+      const MIN_CHARS = (tts.server == Server.VOX_ANE) ? 100 : 150;
+      const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 250 : 300;
       // Known abbreviations that should NOT end a sentence
       const ABBREV = new Set([
         "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",
@@ -1015,15 +1017,9 @@
       return idx;
     }
 
+    btnPrev.onclick = () => { playAt(tts.index - 1); };
 
-    btnPrev.onclick = () => {
-      const idx = Math.max(0, (tts.index > 0 ? tts.index : 0) - 1);
-      playAt(idx);
-    };
-
-    btnNext.onclick = () => {
-      if (tts.index + 1 < tts.segments.length) playAt(tts.index + 1);
-    };
+    btnNext.onclick = () => { playAt(tts.index + 1); };
 
     btnPrevP.onclick = () => {
       if (!tts.prepared || !tts.meta?.length) return;

@@ -64,7 +64,7 @@
     highlightSpan: null, // active <span> wrapper for current sentence
   };
 
-  function sig(){ return `${tts.server}:${tts.voice}:${tts.speed}`; }
+  function sig(){ return `${tts.server}|${tts.voice}|${tts.speed}`; }
   function ttsKey(i){ return `${sig()}:${i}`; }
   function ensureCtx() {
     if (!tts.audioCtx || tts.audioCtx.state === "closed") {
@@ -114,6 +114,7 @@
   }
   // Fetch + decode a segment through background proxy
   async function fetchAndDecodeSegment(i, signature, stream) {
+    if (signature != sig()) return;
 
     const k = ttsKey(i);
 
@@ -125,12 +126,16 @@
     // 2) Already in flight for this index: reuse its Promise
     if (tts.inFlight.has(k)) return tts.inFlight.get(k);
 
+    if (i != tts.index && !tts.decoded.has(ttsKey(tts.index))) {
+      console.log('skip i', i, 'index', tts.index);
+      return;
+    }
+
     // 3) New synth task for this index
     const task = (async () => {
       try {
         setStatus(`T→S ${i + 1} / ${tts.segments.length} ...`);
 
-        if (signature != sig()) throw new Error("Mismatched signature");
         // Only one synth at a time goes through this lock
         const response = await withSynthLock(() =>
           chrome.runtime.sendMessage({
@@ -185,12 +190,12 @@
 
     highlightCurrent(index);
     try {
+      tts.index = index;
       // Fetch and Wait for this segment's audio
       const cur = await fetchAndDecodeSegment(index, sig(), true);
       // If something changed (voice/jump/stop) while we were waiting, bail
       if (!tts.playing || !tts.segments.length || token != tts.playToken) return;
 
-      tts.index = index;
       const ctx = ensureCtx();
 
       // Resume context if needed (user gesture requirement)
@@ -245,14 +250,19 @@
         for (let i = start; i <= end; i++) {
           const k = ttsKey(i);
           if (!tts.decoded.has(k) && !tts.inFlight.has(k)) {
-            fetches.push(fetchAndDecodeSegment(i, sig(), false).catch(() => {}));
+            // don't prefetch if current not fetched
+            console.log('index', tts.index);
+            if (!tts.decoded.has(ttsKey(tts.index))) {
+              console.log('i', i, 'index', tts.index);
+              break;
+            }
+            await fetchAndDecodeSegment(i, sig(), false);
           }
         }
-        await Promise.all(fetches);
         // Cleanup only far-behind buffers
         for (const k of Array.from(tts.decoded.keys())) {
           const idx = parseInt(k.split(":")[1], 10);
-          if (Number.isFinite(idx) && idx < index - (tts.keepBehind + 3)) {
+          if (Number.isFinite(idx) && idx < tts.index - tts.keepBehind) {
             tts.decoded.delete(k);
           }
         }

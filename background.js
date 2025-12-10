@@ -27,7 +27,7 @@ const TTS_SERVER = new Map([
 ]);
 
 // Simple in-memory cache to avoid spamming the server
-let __voicesCache = new Map();
+// let __voicesCache = new Map();
 
 async function fetchVoices(server) {
   // const v = __voicesCache.get(server);

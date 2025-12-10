@@ -95,11 +95,11 @@
   }
 
   // Decode Opus ArrayBuffer to AudioBuffer
-  async function decodeBuffer(i, arrayBuffer) {
+  function decodeBuffer(i, arrayBuffer) {
     const k = ttsKey(i);
     if (tts.decoded.has(k)) return tts.decoded.get(k);
     const ctx = ensureCtx();
-    const ab = await ctx.decodeAudioData(arrayBuffer.slice(0));
+    const ab = ctx.decodeAudioData(arrayBuffer.slice(0));
     tts.decoded.set(k, ab);
     return ab;
   }
@@ -113,12 +113,9 @@
     return next;
   }
   // Fetch + decode a segment through background proxy
-  async function fetchAndDecodeSegment(i, signature, stream) {
-    if (signature != sig()) return;
+  async function fetchAndDecodeSegment(i, signature, priority) {
 
     const k = ttsKey(i);
-
-    const text = tts.texts[i];
 
     // 1) Already decoded
     if (tts.decoded.has(k)) return tts.decoded.get(k);
@@ -126,21 +123,19 @@
     // 2) Already in flight for this index: reuse its Promise
     if (tts.inFlight.has(k)) return tts.inFlight.get(k);
 
-    if (i != tts.index && !tts.decoded.has(ttsKey(tts.index))) {
-      console.log('skip i', i, 'index', tts.index);
+    // if sig changed or fetching something other than current but current not fetched
+    if (signature !== sig() || i !== tts.index && !tts.decoded.has(ttsKey(tts.index)))
       return;
-    }
 
     // 3) New synth task for this index
     const task = (async () => {
       try {
-        setStatus(`T→S ${i + 1} / ${tts.segments.length} ...`);
-
         // Only one synth at a time goes through this lock
+        setStatus(`T→S ${i + 1} / ${tts.segments.length} ...`);
         const response = await withSynthLock(() =>
           chrome.runtime.sendMessage({
             type: "tts.synthesize",
-            // type: (stream) ? "tts.stream" : "tts.synthesize",
+            // type: (priority) ? "tts.stream" : "tts.synthesize",
             payload: {
               text: tts.texts[i],
               voice: tts.voice,
@@ -151,10 +146,10 @@
         );
 
         if (!response?.ok) throw new Error(response?.error || "Synthesis failed");
-        if (signature != sig()) throw new Error("Unmatched signature");
+        if (signature !== sig()) throw new Error('Stale signature');
 
         const buf = base64ToArrayBuffer(response.base64);
-        const ab = await decodeBuffer(i, buf);
+        const ab = decodeBuffer(i, buf);
         setStatus();
         return ab;
       } catch (err) {
@@ -169,32 +164,18 @@
     return task;
   }
 
-  function expectedDurationFromText(text) {
-    // const charsPerSecond = (tts.voice == '_helen') ? 12.5 :
-    //   (tts.voice == '_jameson') ? 10.5 :
-    //   (tts.voice == '_denise') ? 13.0 :
-    //   (tts.voice == '_caroline') ? 13.0 :
-    //   (tts.voice == '_david') ? 10.0 :
-    //   (tts.voice == '_emily-11') ? 10.0 :
-    //   (tts.voice == '_emilyB-11') ? 10.0 :
-    //   (tts.voice == '_dorothy-11') ? 8.0 :
-    //   (tts.voice == '_scholar') ? 11.0 :
-    //   (tts.voice == '_thomas-11') ? 10.0 :
-    //   9.0;
-    return Math.max(2.0, text.length / 10.0);//charsPerSecond);
-  }
-
   // Main playback scheduler
   async function scheduleAt(index) {
     const token = ++tts.playToken;
+    tts.index = index;
+    const _sig = sig();
 
     highlightCurrent(index);
     try {
-      tts.index = index;
       // Fetch and Wait for this segment's audio
-      const cur = await fetchAndDecodeSegment(index, sig(), true);
+      const cur = await fetchAndDecodeSegment(index, _sig, true);
       // If something changed (voice/jump/stop) while we were waiting, bail
-      if (!tts.playing || !tts.segments.length || token != tts.playToken) return;
+      if (!tts.playing || token != tts.playToken || _sig !== sig()) return;
 
       const ctx = ensureCtx();
 
@@ -224,17 +205,8 @@
       // Start playback of this segment
       src.buffer = cur;
       src.connect(ctx.destination);
-      // const t0 = ctx.currentTime; + 0.12;
       tts.playing = true;
-      if (tts.server == Server.VOX_ANE) {
-        const maxDuration = Math.max(3.0, expectedDurationFromText(tts.texts[index]));
-        if (maxDuration < src.buffer.duration) {
-          console.log(`${maxDuration.toFixed(2)} < ${src.buffer.duration}`);
-        }
-        src.start(0, 0, maxDuration);
-      } else {
-        src.start(0, 0);
-      }
+      src.start(0, 0);
       setStatus(`Playing ${index + 1} / ${tts.segments.length}`);
       highlightReading();
       chrome.runtime.sendMessage({
@@ -248,21 +220,17 @@
         const end = Math.min(tts.segments.length - 1, index + tts.prefetchAhead);
         const fetches = [];
         for (let i = start; i <= end; i++) {
+          if (_sig !== sig() || !tts.decoded.has(ttsKey(tts.index))) break;
           const k = ttsKey(i);
           if (!tts.decoded.has(k) && !tts.inFlight.has(k)) {
-            // don't prefetch if current not fetched
-            console.log('index', tts.index);
-            if (!tts.decoded.has(ttsKey(tts.index))) {
-              console.log('i', i, 'index', tts.index);
-              break;
-            }
-            await fetchAndDecodeSegment(i, sig(), false);
+            await fetchAndDecodeSegment(i, _sig, false);
           }
         }
         // Cleanup only far-behind buffers
         for (const k of Array.from(tts.decoded.keys())) {
           const idx = parseInt(k.split(":")[1], 10);
           if (Number.isFinite(idx) && idx < tts.index - tts.keepBehind) {
+            // console.log(`removing ${k}`);
             tts.decoded.delete(k);
           }
         }
@@ -727,7 +695,7 @@
         tts.voice = voiceEl.value;
         prefs.voice[tts.server] = voiceEl.value;
         savePrefs(prefs);
-        invalidateAudio();
+        invalidateAudio(true);
         // if (!wasPlaying && tts.server == Server.VOX_ANE && tts.voice) {
         //   try { chrome.runtime.sendMessage({
         //     type: "tts.warmup",
@@ -744,7 +712,7 @@
         speedLabel.textContent = `${newSpeed}x`;
         prefs.speed = newSpeed;
         savePrefs(prefs);
-        invalidateAudio();
+        invalidateAudio(true);
       }
     });
 
@@ -994,7 +962,7 @@
       scheduleAt(idx);
     }
 
-    function invalidateAudio(continuePlay = true) {
+    function invalidateAudio(continuePlay) {
       const wasPlaying = tts.playing;
       stopPlayback();
       tts.decoded.clear();

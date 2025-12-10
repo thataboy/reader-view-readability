@@ -20,7 +20,7 @@
   // Storage helpers
   // --------------------------
   const STORAGE_KEY = "rv_prefs_v1";
-  const defaults = { fontSize: 17, maxWidth: 860, voice: {}, speed: 1.0, server: Server.MY_KOKORO };
+  const defaults = { fontSize: 17, maxWidth: 860, voice: {}, speed: 1.0, server: Server.MY_KOKORO, voiceRatings: {} };
   async function loadPrefs() {
     try {
       const out = await chrome.storage.local.get(STORAGE_KEY);
@@ -411,6 +411,7 @@
             <div id="rv-tts" style="margin-left:5px;display:flex;gap:4px;align-items:center">
               <div id="rv-servers"></div>
               <select id="rv-voice" title="Voice"></select>
+              <div id="rv-rating-control" class="rv-rating-control" title="Rate the selected voice (0-3 stars)"></div>
               <label class="rv-inline" title="Speed">
               <input id="rv-speed" type="range" min="0.7" max="1.5" step="0.05" value="1.0" />
               </label>
@@ -557,8 +558,7 @@
     document.documentElement.appendChild(container);
     surface.focus();
 
-    // Setup TTS controls
-    setupStaticTTSControls(container, contentHost, prefs);
+    setupTTSControls(container, contentHost, prefs);
   }
 
   // --------------------------
@@ -598,10 +598,21 @@
     setIcon("rv-tts-nextp", "nnext.png");
   }
 
+  function generateRatingControlHTML(rating) {
+      let html = '';
+      for (let i = 3; i >= 1; i--) {
+          const starChar = '★';
+          const isRated = (i <= rating) ? 'rated' : '';
+          html += `<span class="rv-rating-star ${isRated}" data-rating-val="${i}">${starChar}</span>`;
+      }
+      return html;
+  }
+
+
   // --------------------------
   // TTS Controls
   // --------------------------
-  function setupStaticTTSControls(overlay, contentHost, prefs) {
+  function setupTTSControls(overlay, contentHost, prefs) {
     const voiceEl = overlay.querySelector("#rv-voice");
     const speedInp = overlay.querySelector("#rv-speed");
     const speedLabel = overlay.querySelector("#rv-speed-label");
@@ -611,7 +622,9 @@
     const btnNext = overlay.querySelector("#rv-tts-next");
     const btnPrevP = overlay.querySelector("#rv-tts-prevp");
     const btnNextP = overlay.querySelector("#rv-tts-nextp");
-    if (!voiceEl || !speedInp) return;
+    const ratingControl = overlay.querySelector("#rv-rating-control");
+
+    if (!voiceEl || !speedInp || !ratingControl) return;
 
     speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
     speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
@@ -642,6 +655,7 @@
               prefs.server = newServer;
               speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
               speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
+              updateRatingDisplay();
               savePrefs(prefs);
               loadVoiceList();
           }
@@ -649,10 +663,12 @@
     }
 
     async function loadVoiceList() {
+      const serverVoiceRatings = prefs.voiceRatings[tts.server] || {};
+
       // Fallback set if server fails (only used if fetch errors)
       const fallback = new Map([
         [Server.MY_KOKORO, ["ax_liam", "af_heart", "af_kore"]],
-        [Server.VOX_ANE, ["_dorothy-11", "_mark"]]
+        [Server.VOX_ANE, ["dorothy-11", "bf-stephanie"]]
       ]);
       let voices = [];
       try {
@@ -663,17 +679,33 @@
         if (res?.ok) voices = res.voices;
         else console.log(res?.error || "voices fetch failed");
       } finally {
+        // Use fallback if API failed or returned empty
+        voices = voices.length ? voices : (fallback.get(tts.server) || []);
+
+        // 1. Prepare for sorting
+        let voiceData = voices.map(v => ({
+            name: v,
+            rating: serverVoiceRatings[v] || 0
+        }));
+
+        // 2. Sort by rating (descending). The highest rated voices appear first.
+        voiceData.sort((a, b) => b.rating - a.rating);
+
+        // 3. Populate dropdown
         tts.voiceEl.innerHTML = "";
-        voices ||= fallback;
-        for (const v of voices) {
+        for (const data of voiceData) {
           const opt = document.createElement("option");
-          opt.value = v;
-          opt.textContent = v;
+          opt.value = data.name;
+          const stars = '⭐'.repeat(Math.min(3, data.rating));
+          opt.textContent = stars ? `${data.name}  ${stars}` : data.name;
           tts.voiceEl.appendChild(opt);
         }
+
+        // 4. Set selected voice
         const preferred = prefs.voice[tts.server];
         tts.voiceEl.value = voices.includes(preferred) ? preferred : (voices[0] || "");
         tts.voice = tts.voiceEl.value;
+        updateRatingDisplay();
         // if (tts.server == Server.VOX_ANE && tts.voice) {
         //   try { chrome.runtime.sendMessage({
         //     type: "tts.warmup",
@@ -689,11 +721,55 @@
     tts.speed = prefs.speed;
     speedLabel.textContent = `${speedInp.value}x`;
 
+    function getCurrentRating() {
+        return prefs.voiceRatings?.[tts.server]?.[tts.voice] || 0;
+    }
+
+    // Re-generate HTML to apply 'rated' class for persistence and correct character/color.
+    function updateRatingDisplay() {
+        const rating = getCurrentRating();
+        ratingControl.innerHTML = generateRatingControlHTML(rating);
+    }
+
+    // Handle click to set rating
+    ratingControl.addEventListener('click', (e) => {
+        const target = e.target.closest('.rv-rating-star');
+        if (!target) return;
+
+        const currentRating = getCurrentRating();
+        const clickedRating = parseInt(target.dataset.ratingVal, 10);
+        let newRating = clickedRating;
+
+        // If user clicks the currently set rating, unset it (set to 0)
+        if (clickedRating === currentRating) {
+            newRating = 0;
+        }
+
+        // --- Save the new rating ---
+        // Ensure voiceRatings structure exists
+        if (!prefs.voiceRatings) prefs.voiceRatings = {};
+        if (!prefs.voiceRatings[tts.server]) prefs.voiceRatings[tts.server] = {};
+
+        if (newRating === 0) {
+            delete prefs.voiceRatings[tts.server][tts.voice];
+        } else {
+            prefs.voiceRatings[tts.server][tts.voice] = newRating;
+        }
+
+        savePrefs(prefs).then(() => {
+            // Update the interactive display and the dropdown list
+            updateRatingDisplay();
+            // Need to call loadVoiceList to update the dropdown text and sort
+            loadVoiceList();
+        });
+    });
+
     voiceEl.addEventListener("change", () => {
       if (tts.voice !== voiceEl.value) {
         // const wasPlaying = tts.playing;
         tts.voice = voiceEl.value;
         prefs.voice[tts.server] = voiceEl.value;
+        updateRatingDisplay();
         savePrefs(prefs);
         invalidateAudio(true);
         // if (!wasPlaying && tts.server == Server.VOX_ANE && tts.voice) {

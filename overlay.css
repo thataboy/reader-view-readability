@@ -207,3 +207,22 @@ html.rv-active body {
 .rv-tts-reading{
   box-shadow: 2px 2px rgba(200, 255, 50, 0.7);
 }
+.rv-rating-control {
+    font-size: 0.85em;
+    letter-spacing: 0.35em;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    direction: rtl; /* FLIPS the star order (3-2-1) to visually be 1-2-3 for hover trick */
+}
+.rv-rating-star {
+    color: #ddd; /* Default color for unlit stars (which use the ★ character) */
+    transition: color 0.1s;
+}
+.rv-rating-star.rated {
+    color: gold;
+}
+.rv-rating-control:hover .rv-rating-star:hover,
+.rv-rating-control:hover .rv-rating-star:hover ~ .rv-rating-star {
+    color: orange !important;
+}

@@ -1,6 +1,7 @@
 const Server = Object.freeze({
     MY_KOKORO: 1,
-    VOX_ANE: 2
+    VOX_ANE: 2,
+    SUPERTONIC: 3
 });
 
 // ----- Reader View Injection (unchanged) -----
@@ -23,7 +24,8 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 
 const TTS_SERVER = new Map([
   [Server.MY_KOKORO, 'http://127.0.0.1:9090'],
-  [Server.VOX_ANE, 'http://127.0.0.1:9000']
+  [Server.VOX_ANE, 'http://127.0.0.1:9000'],
+  [Server.SUPERTONIC, 'http://127.0.0.1:8001']
 ]);
 
 // Simple in-memory cache to avoid spamming the server
@@ -138,18 +140,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       if (msg.type === "tts.synthesize") {
-        const { text, voice, speed, server } = msg.payload || {};
+        const { signature, out_of_order, text, voice, speed, server } = msg.payload || {};
+        if (signature !== `${server}|${voice}|${speed}`) {
+          sendResponse({ error: `mismatched ${signature}`});
+          return
+        }
+        if (out_of_order) {
+          sendResponse({ error: 'out_of_order'});
+          return
+        }
         let input = (server == Server.VOX_ANE) ? sanitize(text) : text?.trim();
         if (!input || server == Server.VOX_ANE && input.length < 5) {
           sendResponse({ error: '/synthesize failed: Text empty or too short' });
           return
         }
-        const r = (server == Server.MY_KOKORO) ?
+        const r = (server == Server.SUPERTONIC) ?
         await fetch(`${TTS_SERVER.get(server)}/synthesize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ input, voice, speed })
-        }) :
+        }) : (server == Server.VOX_ANE) ?
         await fetch(`${TTS_SERVER.get(server)}/v1/audio/speech`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -158,8 +168,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             input,
             voice,
             "inference_timesteps": 10,
-            "response_format": "ogg"
+            "response_format": "wav"
           })
+        }) :
+        await fetch(`${TTS_SERVER.get(server)}/synthesize`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ input, voice, speed })
         });
         if (!r.ok) {
           sendResponse({ error: `/synthesize failed: ${r.status} ${r.statusText}` });

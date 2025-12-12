@@ -7,20 +7,22 @@
   // Server definitionss
   // --------------------------
   const Server = Object.freeze({
-      MY_KOKORO: 1,
-      VOX_ANE: 2
+      // MY_KOKORO: 1,
+      VOX_ANE: 2,
+      SUPERTONIC: 3
   });
 
   const SERVER_NAME = new Map([
-    [Server.MY_KOKORO, 'Kokoro'],
-    [Server.VOX_ANE, 'Vox']
+    // [Server.MY_KOKORO, 'Kokoro'],
+    [Server.VOX_ANE, 'Vox'],
+    [Server.SUPERTONIC, 'SuperT']
   ]);
 
   // --------------------------
   // Storage helpers
   // --------------------------
   const STORAGE_KEY = "rv_prefs_v1";
-  const defaults = { fontSize: 17, maxWidth: 860, voice: {}, speed: 1.0, server: Server.MY_KOKORO, voiceRatings: {} };
+  const defaults = { fontSize: 17, maxWidth: 860, voice: {}, speed: 1.0, server: Server.VOX_ANE, voiceRatings: {} };
   async function loadPrefs() {
     try {
       const out = await chrome.storage.local.get(STORAGE_KEY);
@@ -40,7 +42,7 @@
   // --------------------------
   const tts = {
     prepared: false,
-    server: Server.MY_KOKORO,
+    server: Server.VOX_ANE,
     voice: '',
     speed: 1.0,
     audioCtx: null,
@@ -120,12 +122,15 @@
     // 1) Already decoded
     if (tts.decoded.has(k)) return tts.decoded.get(k);
 
+    // if sig changed or fetching something other than current but current not fetched
+    // if (signature !== sig() || i !== tts.index && !tts.decoded.has(ttsKey(tts.index))) {
+    //   tts.inFlight.delete(k);
+    //   console.log(`fetch averted ${k}`);
+    //   return;
+    // }
+
     // 2) Already in flight for this index: reuse its Promise
     if (tts.inFlight.has(k)) return tts.inFlight.get(k);
-
-    // if sig changed or fetching something other than current but current not fetched
-    if (signature !== sig() || i !== tts.index && !tts.decoded.has(ttsKey(tts.index)))
-      return;
 
     // 3) New synth task for this index
     const task = (async () => {
@@ -137,6 +142,8 @@
             type: "tts.synthesize",
             // type: (priority) ? "tts.stream" : "tts.synthesize",
             payload: {
+              signature,
+              out_of_order: i !== tts.index && !tts.decoded.has(ttsKey(tts.index)),
               text: tts.texts[i],
               voice: tts.voice,
               speed: tts.speed,
@@ -191,9 +198,13 @@
       src.onended = () => {
         if (!tts.playing || token !== tts.playToken) return;
         tts.currentSrc = null;
-        const next = index + 1;
+        const next = tts.index + 1;
         if (next < tts.segments.length) {
-          scheduleAt(next);
+          if (tts.server == Server.SUPERTONIC) {
+            setTimeout(() => { scheduleAt(next); }, 500);
+          } else {
+            scheduleAt(next);
+          }
         } else {
           stopPlayback();
           tts.index = 0;
@@ -207,7 +218,7 @@
       src.connect(ctx.destination);
       tts.playing = true;
       src.start(0, 0);
-      setStatus(`Playing ${index + 1} / ${tts.segments.length}`);
+      setStatus(`Playing ${tts.index + 1} / ${tts.segments.length}`);
       highlightReading();
       chrome.runtime.sendMessage({
         type: "tts.positionChanged",
@@ -216,11 +227,13 @@
 
       // Prefetch without blocking the onended attachment/playback
       (async () => {
-        const start = Math.max(0, index + 1);
-        const end = Math.min(tts.segments.length - 1, index + tts.prefetchAhead);
-        const fetches = [];
+        const start = Math.max(0, tts.index + 1);
+        const end = Math.min(tts.segments.length - 1, tts.index + tts.prefetchAhead);
         for (let i = start; i <= end; i++) {
-          if (_sig !== sig() || !tts.decoded.has(ttsKey(tts.index))) break;
+          // if (_sig !== sig() || !tts.decoded.has(ttsKey(tts.index))) {
+          //   console.log(`prefetch averted ${_sig} ${i}`);
+          //   break;
+          // };
           const k = ttsKey(i);
           if (!tts.decoded.has(k) && !tts.inFlight.has(k)) {
             await fetchAndDecodeSegment(i, _sig, false);
@@ -667,8 +680,9 @@
 
       // Fallback set if server fails (only used if fetch errors)
       const fallback = new Map([
-        [Server.MY_KOKORO, ["ax_liam", "af_heart", "af_kore"]],
-        [Server.VOX_ANE, ["dorothy-11", "bf-stephanie"]]
+        // [Server.MY_KOKORO, ["ax_liam", "af_heart", "af_kore"]],
+        [Server.VOX_ANE, ["dorothy-11", "bf-stephanie"]],
+        [Server.SUPERTONIC, ["F1", "M1"]]
       ]);
       let voices = [];
       try {
@@ -794,8 +808,8 @@
 
     // Segment sentences from article
     function segmentSentences(rootEl) {
-      const MIN_CHARS = (tts.server == Server.VOX_ANE) ? 100 : 150;
-      const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 250 : 300;
+      const MIN_CHARS = (tts.server == Server.VOX_ANE) ? 100 : (tts.server == Server.SUPERTONIC) ? 20 : 150;
+      const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 250 : (tts.server == Server.SUPERTONIC) ? 600 : 300;
       // Known abbreviations that should NOT end a sentence
       const ABBREV = new Set([
         "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",

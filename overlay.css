@@ -44,8 +44,8 @@
     --rv-bg: #0b0d10;
     --rv-fg: #e6e8eb;
     --rv-border: #2b2f36;
-    --rv-panel: #12251abb;
-    --rv-button: #12251aee;
+    --rv-panel: #12251a;
+    --rv-button: #12251a;
     ::selection {
       background-color: #225599;
       color: #e8e8e8;
@@ -69,8 +69,8 @@
         --rv-bg: #111;
         --rv-fg: #e8e8e8;
         --rv-border: #113338;
-        --rv-panel: #113322bb;
-        --rv-button: #113322dd;
+        --rv-panel: #113322;
+        --rv-button: #113322;
     }
     ::selection {
       background-color: #225599;

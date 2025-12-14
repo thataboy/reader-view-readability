@@ -52,49 +52,6 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
-// Convert raw 16-bit PCM mono to a minimal WAV ArrayBuffer
-function pcmBytesToWav(pcmBytes, sampleRate) {
-  const numChannels = 1;
-  const bitsPerSample = 16;
-  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-  const blockAlign = numChannels * (bitsPerSample / 8);
-  const dataSize = pcmBytes.byteLength;
-
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-  let offset = 0;
-
-  function writeString(s) {
-    for (let i = 0; i < s.length; i++) {
-      view.setUint8(offset++, s.charCodeAt(i));
-    }
-  }
-
-  // RIFF header
-  writeString('RIFF');
-  view.setUint32(offset, 36 + dataSize, true); offset += 4;
-  writeString('WAVE');
-
-  // fmt chunk
-  writeString('fmt ');
-  view.setUint32(offset, 16, true); offset += 4;          // Subchunk1Size (16 for PCM)
-  view.setUint16(offset, 1, true); offset += 2;           // AudioFormat (1 = PCM)
-  view.setUint16(offset, numChannels, true); offset += 2; // NumChannels
-  view.setUint32(offset, sampleRate, true); offset += 4;  // SampleRate
-  view.setUint32(offset, byteRate, true); offset += 4;    // ByteRate
-  view.setUint16(offset, blockAlign, true); offset += 2;  // BlockAlign
-  view.setUint16(offset, bitsPerSample, true); offset += 2; // BitsPerSample
-
-  // data chunk
-  writeString('data');
-  view.setUint32(offset, dataSize, true); offset += 4;
-
-  // PCM data
-  const outBytes = new Uint8Array(buffer, 44);
-  outBytes.set(pcmBytes);
-
-  return buffer;
-}
 
 // fix a bunch of weird quirks with VoxCPM
 function sanitize(text) {
@@ -186,100 +143,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
 
-      if (msg.type === "tts.stream") {
-        const { text, voice, speed, server } = msg.payload || {};
-        let input = (server == Server.VOX_ANE) ? sanitize(text) : text?.trim();
-        if (!input || server == Server.VOX_ANE && input.length < 5) {
-          sendResponse({ error: '/synthesize failed: Text empty or too short' });
-          return;
-        }
-
-        let r;
-        if (server == Server.MY_KOKORO) {
-          r = await fetch(`${TTS_SERVER.get(server)}/stream`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ input, voice, speed })
-          });
-        } else { // if (server == Server.VOX_ANE) {
-          r = await fetch(`${TTS_SERVER.get(server)}/v1/audio/speech/stream`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "voxcpm-0.5b",
-              input,
-              voice,
-              inference_timesteps: 10,
-              response_format: "pcm"
-            })
-          });
-        }
-
-        if (!r.ok) {
-          sendResponse({ error: `/synthesize failed: ${r.status} ${r.statusText}` });
-          return;
-        }
-
-        const sampleRateHeader = r.headers.get("X-Sample-Rate");
-        const sampleRate = sampleRateHeader ? parseInt(sampleRateHeader, 10) : 24000;
-
-        const reader = r.body && r.body.getReader ? r.body.getReader() : null;
-        if (!reader) {
-          sendResponse({ error: "/synthesize failed: streaming body not available" });
-          return;
-        }
-
-        const chunks = [];
-        let total = 0;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value && value.length) {
-            chunks.push(value);
-            total += value.length;
-          }
-        }
-
-        if (!total) {
-          sendResponse({ error: "/synthesize failed: empty audio stream" });
-          return;
-        }
-
-        const pcmBytes = new Uint8Array(total);
-        let offset = 0;
-        for (const c of chunks) {
-          pcmBytes.set(c, offset);
-          offset += c.length;
-        }
-
-        const wavBuffer = pcmBytesToWav(pcmBytes, sampleRate);
-        const b64 = arrayBufferToBase64(wavBuffer);
-        sendResponse({ ok: true, base64: b64 });
-        return;
-      }
-
       if (msg.type === "tts.cancel") {
         const { server } = msg.payload;
         try {
           fetch(`${TTS_SERVER.get(server)}/v1/audio/speech/cancel`, { method: "POST" });
         } catch {}
-        sendResponse({ ok: true });
-        return;
-      }
-
-      if (msg.type === "tts.warmup") {
-        const { voice } = msg.payload;
-        fetch(`${TTS_SERVER.get(Server.VOX_ANE)}/v1/audio/speech`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            "model": "voxcpm-0.5b",
-            "input": "Okey dokey.",
-            voice,
-            "inference_timesteps": 10,
-            "response_format": "wav"
-          })
-        });
         sendResponse({ ok: true });
         return;
       }

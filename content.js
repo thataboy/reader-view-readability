@@ -122,13 +122,6 @@
     // 1) Already decoded
     if (tts.decoded.has(k)) return tts.decoded.get(k);
 
-    // if sig changed or fetching something other than current but current not fetched
-    // if (signature !== sig() || i !== tts.index && !tts.decoded.has(ttsKey(tts.index))) {
-    //   tts.inFlight.delete(k);
-    //   console.log(`fetch averted ${k}`);
-    //   return;
-    // }
-
     // 2) Already in flight for this index: reuse its Promise
     if (tts.inFlight.has(k)) return tts.inFlight.get(k);
 
@@ -140,7 +133,6 @@
         const response = await withSynthLock(() =>
           chrome.runtime.sendMessage({
             type: "tts.synthesize",
-            // type: (priority) ? "tts.stream" : "tts.synthesize",
             payload: {
               signature,
               out_of_order: i !== tts.index && !tts.decoded.has(ttsKey(tts.index)),
@@ -230,10 +222,6 @@
         const start = Math.max(0, tts.index + 1);
         const end = Math.min(tts.segments.length - 1, tts.index + tts.prefetchAhead);
         for (let i = start; i <= end; i++) {
-          // if (_sig !== sig() || !tts.decoded.has(ttsKey(tts.index))) {
-          //   console.log(`prefetch averted ${_sig} ${i}`);
-          //   break;
-          // };
           const k = ttsKey(i);
           if (!tts.decoded.has(k) && !tts.inFlight.has(k)) {
             await fetchAndDecodeSegment(i, _sig, false);
@@ -720,12 +708,6 @@
         tts.voiceEl.value = voices.includes(preferred) ? preferred : (voices[0] || "");
         tts.voice = tts.voiceEl.value;
         updateRatingDisplay();
-        // if (tts.server == Server.VOX_ANE && tts.voice) {
-        //   try { chrome.runtime.sendMessage({
-        //     type: "tts.warmup",
-        //     payload: { voice: tts.voice }
-        //   }) } catch {}
-        // }
       }
     }
 
@@ -786,12 +768,6 @@
         updateRatingDisplay();
         savePrefs(prefs);
         invalidateAudio(true);
-        // if (!wasPlaying && tts.server == Server.VOX_ANE && tts.voice) {
-        //   try { chrome.runtime.sendMessage({
-        //     type: "tts.warmup",
-        //     payload: { voice: tts.voice }
-        //   }) } catch {}
-        // }
       }
     });
 
@@ -808,8 +784,8 @@
 
     // Segment sentences from article
     function segmentSentences(rootEl) {
-      const MIN_CHARS = (tts.server == Server.VOX_ANE) ? 100 : (tts.server == Server.SUPERTONIC) ? 20 : 150;
-      const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 250 : (tts.server == Server.SUPERTONIC) ? 600 : 300;
+      const MIN_CHARS = (tts.server == Server.VOX_ANE) ? 70 : (tts.server == Server.SUPERTONIC) ? 20 : 150;
+      const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 300 : (tts.server == Server.SUPERTONIC) ? 600 : 300;
       // Known abbreviations that should NOT end a sentence
       const ABBREV = new Set([
         "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",

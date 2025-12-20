@@ -7,13 +7,13 @@
   // Server definitionss
   // --------------------------
   const Server = Object.freeze({
-      // MY_KOKORO: 1,
+      MY_KOKORO: 1,
       VOX_ANE: 2,
       SUPERTONIC: 3
   });
 
   const SERVER_NAME = new Map([
-    // [Server.MY_KOKORO, 'Kokoro'],
+    [Server.MY_KOKORO, 'Kokoro'],
     [Server.VOX_ANE, 'Vox'],
     [Server.SUPERTONIC, 'SuperT']
   ]);
@@ -66,7 +66,7 @@
     highlightSpan: null, // active <span> wrapper for current sentence
   };
 
-  const LONG_PAGE_THRESHOLD = 500;  // Minimum segments to consider a page "long"
+  const LONG_PAGE_THRESHOLD = 200;  // Minimum segments to consider a page "long"
   const MAX_SAVED_PAGES = 50;       // Max number of saved reading positions
   const currentPageUrl = window.location.href.split(/[?#]/)[0]; // Use URL without query/hash
 
@@ -598,8 +598,8 @@
 
   // Segment sentences from article (MOVED HERE to be available to toggle() for initial setup)
   function segmentSentences(rootEl) {
-    const MIN_CHARS = (tts.server == Server.VOX_ANE) ? 70 : (tts.server == Server.SUPERTONIC) ? 20 : 150;
-    const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 300 : (tts.server == Server.SUPERTONIC) ? 600 : 300;
+    const MIN_CHARS = (tts.server == Server.VOX_ANE) ? 25 : (tts.server == Server.SUPERTONIC) ? 20 : 150;
+    const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 250 : (tts.server == Server.SUPERTONIC) ? 600 : 300;
     // Known abbreviations that should NOT end a sentence
     const ABBREV = new Set([
       "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",
@@ -822,7 +822,13 @@
     if (existing) { existing.querySelector("#rv-close")?.click(); return; }
     if (!window.Readability) { console.error("Readability not found. Inject readability.js first."); return; }
 
-    document.querySelectorAll(`script, dialog, modal, form, [class*="hidden"]`).forEach(el => el.remove());
+    document.querySelectorAll(`script, dialog, modal, form, [class*="tags"], [class*="signup"], [class*="hidden"]`)
+      .forEach(el => el.remove());
+    if (window.location.href.includes('slate.com')) {
+      document.querySelectorAll('p').forEach(p => {
+        if (p.textContent.includes('Sign up for')) p.remove();
+      })
+    }
 
     const dom = new DOMParser().parseFromString(
       "<!doctype html>" + document.documentElement.outerHTML,
@@ -958,7 +964,7 @@
 
       // Fallback set if server fails (only used if fetch errors)
       const fallback = new Map([
-        // [Server.MY_KOKORO, ["ax_liam", "af_heart", "af_kore"]],
+        [Server.MY_KOKORO, ["ax_liam", "af_heart", "af_kore"]],
         [Server.VOX_ANE, ["dorothy-11", "bf-stephanie"]],
         [Server.SUPERTONIC, ["F1", "M1"]]
       ]);
@@ -981,7 +987,7 @@
         }));
 
         // 2. Sort by rating (descending). The highest rated voices appear first.
-        voiceData.sort((a, b) => b.rating - a.rating);
+        // voiceData.sort((a, b) => b.rating - a.rating);
 
         // 3. Populate dropdown
         tts.voiceEl.innerHTML = "";

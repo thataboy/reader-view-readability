@@ -52,6 +52,44 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
+function generateSilenceWav() {
+  const sampleRate = 24000;
+  const duration = 0.5;
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteLength = sampleRate * duration * numChannels * (bitsPerSample / 8);
+
+  const buffer = new ArrayBuffer(44 + byteLength);
+  const view = new DataView(buffer);
+
+  // RIFF identifier 'RIFF'
+  view.setUint32(0, 0x52494646, false);
+  // file length
+  view.setUint32(4, 36 + byteLength, true);
+  // RIFF type 'WAVE'
+  view.setUint32(8, 0x57415645, false);
+  // format chunk identifier 'fmt '
+  view.setUint32(12, 0x666d7420, false);
+  // format chunk length
+  view.setUint32(16, 16, true);
+  // sample format (raw)
+  view.setUint16(20, 1, true);
+  // channel count
+  view.setUint16(22, numChannels, true);
+  // sample rate
+  view.setUint32(24, sampleRate, true);
+  // byte rate (sample rate * block align)
+  view.setUint32(28, sampleRate * numChannels * (bitsPerSample / 8), true);
+  // block align (channel count * bytes per sample)
+  view.setUint16(32, numChannels * (bitsPerSample / 8), true);
+  // bits per sample
+  view.setUint16(34, bitsPerSample, true);
+  // data chunk identifier 'data'
+  view.setUint32(36, 0x64617461, false);
+  // data chunk length
+  view.setUint32(40, byteLength, true);
+  return buffer;
+}
 
 // fix a bunch of weird quirks with VoxCPM
 function sanitize(text) {
@@ -62,7 +100,7 @@ function sanitize(text) {
     .replace(/\-/g, ' ')
     // .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
     .replace(/[“”"]/g, ' ')
-    .replace(/[‘’]/g, "'")
+    // .replace(/[‘’]/g, "'")
     .replace(/(\.|\*|\-){3,}/g, ' ')
     // .replace(/-(?![a-zA-Z])|(?<![a-zA-Z])-/g, ' ')
     // .replace(/[—:;]/g, ', ')
@@ -71,9 +109,9 @@ function sanitize(text) {
     .replace(/^[,.]\s*/, '')
     .replace(/(\s*(\.))+$/, '$1')
     .replace(/\s+([,.])/g, '$1')
-    .replace(/(["”’'])\s*\.\s*$/, '$1')
-    .replace(/\s+([”’])/g, '$1')
-    .replace(/([‘“])\s+/g, '$1')
+    // .replace(/(["”’'])\s*\.?\s*$/, '')
+    // .replace(/\s+([”’])/g, '$1')
+    // .replace(/([‘“])\s+/g, '$1')
     .replace(/(\s*[,!:;]\s*)+$/, '')
     .replace(/^(\s*[,!:;]\s*)+/, '')
     .replace(/\s+/g, ' ')
@@ -108,7 +146,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         let input = (server == Server.VOX_ANE) ? sanitize(text) : text?.trim();
         if (!input || server == Server.VOX_ANE && input.length < 5) {
-          sendResponse({ error: '/synthesize failed: Text empty or too short' });
+          const buf = generateSilenceWav();
+          const b64 = arrayBufferToBase64(buf);
+          sendResponse({ ok: true, base64: b64 });
           return
         }
         const r = (server == Server.SUPERTONIC) ?

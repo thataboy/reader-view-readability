@@ -270,33 +270,37 @@
     setStatus("Ready");
   }
 
-  // Saves the current TTS reading progress (index) to prefs, and prunes old entries.
-  function saveReadingProgress(prefs) {
+  // Saves the current TTS reading progress (index) to storage.
+  async function saveReadingProgress() {
     if (!tts.prepared || tts.segments.length < LONG_PAGE_THRESHOLD) {
-      // Only save progress for long pages
       return;
     }
 
-    // Save the current index and segment count
+    // Fetch latest prefs from storage right now
+    const prefs = await loadPrefs();
+
+    if (!prefs.readingProgress) prefs.readingProgress = {};
+
+    // Update only THIS page's entry
     prefs.readingProgress[currentPageUrl] = {
       index: tts.index,
-      segments: tts.segments.length, // Save segment count to check for article changes
+      segments: tts.segments.length,
       timestamp: Date.now()
     };
 
-    // Prune the oldest entries if the list grows too large
+    // Prune the oldest entries
     const urls = Object.keys(prefs.readingProgress);
     if (urls.length > MAX_SAVED_PAGES) {
       const sortedUrls = urls.sort((a, b) =>
         prefs.readingProgress[a].timestamp - prefs.readingProgress[b].timestamp
       );
-      // Delete the oldest ones
       for (let i = 0; i < urls.length - MAX_SAVED_PAGES; i++) {
         delete prefs.readingProgress[sortedUrls[i]];
       }
     }
 
-    savePrefs(prefs);
+    // Save back to storage
+    await savePrefs(prefs);
   }
 
   // --------------------------
@@ -443,7 +447,7 @@
             <button class="rv-btn" id="rv-width-narrow" title="Narrow page"><img></button>
           </div>
           <div class="rv-spacer">
-            <div id="rv-tts" style="margin-left:5px;display:flex;gap:4px;align-items:center">
+            <div id="rv-tts">
               <div id="rv-servers"></div>
               <select id="rv-voice" title="Voice"></select>
               <div id="rv-rating-control" class="rv-rating-control" title="Rate the selected voice (0-3 stars)"></div>
@@ -504,8 +508,8 @@
 
     document.documentElement.classList.add("rv-active");
 
-    function cleanup() {
-      saveReadingProgress(prefs);
+    async function cleanup() {
+      await saveReadingProgress(prefs);
       stopPlayback();
       document.removeEventListener("keydown", onKey, true);
       document.removeEventListener("copy", onCopy, true);

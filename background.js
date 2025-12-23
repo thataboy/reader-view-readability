@@ -22,10 +22,12 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 });
 
 
+const SERVER_IP = navigator.userAgent.includes('Mac OS X') ? '127.0.0.1' : '192.168.1.11';
+
 const TTS_SERVER = new Map([
-  [Server.MY_KOKORO, 'http://127.0.0.1:9090'],
-  [Server.VOX_ANE, 'http://127.0.0.1:9000'],
-  [Server.SUPERTONIC, 'http://127.0.0.1:8001']
+  [Server.MY_KOKORO, `http://${SERVER_IP}:9090`],
+  [Server.VOX_ANE, `http://${SERVER_IP}:9000`],
+  [Server.SUPERTONIC, `http://${SERVER_IP}:8001`]
 ]);
 
 // Simple in-memory cache to avoid spamming the server
@@ -135,7 +137,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       if (msg.type === "tts.synthesize") {
-        const { signature, out_of_order, text, voice, speed, server } = msg.payload || {};
+        const { signature, out_of_order, fast, text, voice, speed, server } = msg.payload || {};
         if (signature !== `${server}|${voice}|${speed}`) {
           sendResponse({ error: `mismatched ${signature}`});
           return
@@ -161,10 +163,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            "model": "voxcpm-0.5b",
             input,
             voice,
-            "inference_timesteps": 10,
+            "inference_timesteps": fast ? 5 : 10,
             "response_format": "wav"
           })
         }) :

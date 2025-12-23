@@ -4,16 +4,16 @@
   window.__readerViewInstalled = true;
 
   // --------------------------
-  // Server definitionss
+  // Server definitions
   // --------------------------
   const Server = Object.freeze({
-      MY_KOKORO: 1,
+      // MY_KOKORO: 1,
       VOX_ANE: 2,
       SUPERTONIC: 3
   });
 
   const SERVER_NAME = new Map([
-    [Server.MY_KOKORO, 'Kokoro'],
+    // [Server.MY_KOKORO, 'Kokoro'],
     [Server.VOX_ANE, 'Vox'],
     [Server.SUPERTONIC, 'SuperT']
   ]);
@@ -140,6 +140,7 @@
             payload: {
               signature,
               out_of_order: i !== tts.index && !tts.decoded.has(ttsKey(tts.index)),
+              fast: i === tts.index,
               text: tts.texts[i],
               voice: tts.voice,
               speed: tts.speed,
@@ -598,8 +599,8 @@
 
   // Segment sentences from article (MOVED HERE to be available to toggle() for initial setup)
   function segmentSentences(rootEl) {
-    const MIN_CHARS = (tts.server == Server.VOX_ANE) ? 25 : (tts.server == Server.SUPERTONIC) ? 20 : 150;
-    const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 250 : (tts.server == Server.SUPERTONIC) ? 600 : 300;
+    const MIN_CHARS = (tts.server == Server.VOX_ANE) ? 35 : (tts.server == Server.SUPERTONIC) ? 20 : 150;
+    const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 200 : (tts.server == Server.SUPERTONIC) ? 600 : 300;
     // Known abbreviations that should NOT end a sentence
     const ABBREV = new Set([
       "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",
@@ -964,8 +965,8 @@
 
       // Fallback set if server fails (only used if fetch errors)
       const fallback = new Map([
-        [Server.MY_KOKORO, ["ax_liam", "af_heart", "af_kore"]],
-        [Server.VOX_ANE, ["dorothy-11", "bf-stephanie"]],
+        // [Server.MY_KOKORO, ["ax_liam", "af_heart", "af_kore"]],
+        [Server.VOX_ANE, ["adam", "dorothy"]],
         [Server.SUPERTONIC, ["F1", "M1"]]
       ]);
       let voices = [];
@@ -1063,7 +1064,7 @@
         prefs.voice[tts.server] = voiceEl.value;
         updateRatingDisplay();
         savePrefs(prefs);
-        invalidateAudio(true);
+        invalidateAudio(false);
       }
     });
 
@@ -1074,7 +1075,7 @@
         speedLabel.textContent = `${newSpeed}x`;
         prefs.speed = newSpeed;
         savePrefs(prefs);
-        invalidateAudio(true);
+        invalidateAudio(false);
       }
     });
 

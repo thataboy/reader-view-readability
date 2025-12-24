@@ -601,223 +601,175 @@
     setupTTSControls(container, contentHost, prefs);
   }
 
-  // Segment sentences from article (MOVED HERE to be available to toggle() for initial setup)
+  // Pre-compile regexes and moves constants outside for performance
+  const ABBREV = new Set([
+    "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",
+    "No", "Fig", "Rev", "Sen", "Capt", "Sgt", "Col", "Adm",
+    "U.S", "U.K", "A.M", "P.M", "a.m", "p.m", "e.g", "i.e", "Vs", "vs", "cf",
+    "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug",
+    "Sep", "Sept", "Oct", "Nov", "Dec",
+  ]);
+
+  const RE_ABBREV_FALLBACK = /[^A-Z.]([A-Z]\.)+$/;
+  const RE_ABBREV_MATCH = /[^A-Za-z.]([A-Za-z.]+)\.$/;
+  const SEGMENTER = new Intl.Segmenter(undefined, { granularity: "sentence" });
+
+  // Helper: does segment end with an abbreviation?
+  function endsWithAbbreviation(str) {
+    // Strip trailing quotes/paren
+    const cleaned = str.trim(); //.replace(/['"”’)\]]+$/, "");
+    if (cleaned.match(/[^A-Z.]([A-Z]\.)+$/)) return true;
+    const m = cleaned.match(/[^A-Za-z.]([A-Za-z.]+)\.$/);
+    if (!m) return false;
+    return ABBREV.has(m[1]);
+  }
+
+  // Helper: choose a split index (within str) for Vox long chunks.
+  // Only split at ",", ";" or "--" near the middle. If nothing found, return -1.
+  function chooseVoxSplitIndex(str) {
+    const len = str.length;
+    if (len < 2) return -1;
+
+    const mid = Math.floor(len / 2);
+
+    const isGoodPunctBoundary = (i) => {
+      // we split "after" i - 1
+      const prev = str[i - 1];
+      const prev2 = str[i - 2];
+      if ([',', ';', '—'].includes(prev)) return true;
+      if (prev === '-' && prev2 === '-') return true; // "--"
+      return false;
+    };
+
+    const maxOffset = Math.floor(len * 0.25); // search in middle 50 percent band
+
+    for (let off = 0; off <= maxOffset; off++) {
+      const left = mid - off;
+      const right = mid + off;
+
+      if (left > 1 && left < len && isGoodPunctBoundary(left)) {
+        return left;
+      }
+      if (right > 1 && right < len && isGoodPunctBoundary(right)) {
+        return right;
+      }
+    }
+
+    // no suitable punctuation found
+    return -1;
+  }
+
   function segmentSentences(rootEl) {
-    const MIN_CHARS = (tts.server == Server.VOX_ANE) ? 35 : (tts.server == Server.SUPERTONIC) ? 20 : 150;
-    const MAX_CHARS = (tts.server == Server.VOX_ANE) ? 200 : (tts.server == Server.SUPERTONIC) ? 600 : 300;
-    // Known abbreviations that should NOT end a sentence
-    const ABBREV = new Set([
-      "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",
-      "No", "Fig", "Rev", "Sen", "Capt", "Sgt", "Col", "Adm",
-      "U.S", "U.K", "A.M", "P.M", "a.m", "p.m", "e.g", "i.e", "Vs", "vs", "cf",
-      "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug",
-      "Sep", "Sept", "Oct", "Nov", "Dec",
-    ]);
+    const isVox = tts.server == Server.VOX_ANE;
+    const isSuper = tts.server == Server.SUPERTONIC;
+    const MIN_CHARS = isVox ? 35 : (isSuper ? 20 : 150);
+    const MAX_CHARS = isVox ? 200 : (isSuper ? 600 : 300);
 
-    // Helper: does segment end with an abbreviation?
-    function endsWithAbbreviation(str) {
-      // Strip trailing quotes/paren
-      const cleaned = str.trim(); //.replace(/['"”’)\]]+$/, "");
-      if (cleaned.match(/[^A-Z.]([A-Z]\.)+$/)) return true;
-      const m = cleaned.match(/[^A-Za-z.]([A-Za-z.]+)\.$/);
-      if (!m) return false;
-      return ABBREV.has(m[1]);
-    }
-
-    // Helper: choose a split index (within str) for Vox long chunks.
-    // Only split at ",", ";" or "--" near the middle. If nothing found, return -1.
-    function chooseVoxSplitIndex(str) {
-      const len = str.length;
-      if (len < 2) return -1;
-
-      const mid = Math.floor(len / 2);
-
-      const isGoodPunctBoundary = (i) => {
-        // we split "after" i - 1
-        const prev = str[i - 1];
-        const prev2 = str[i - 2];
-        if ([',', ';', '—'].includes(prev)) return true;
-        if (prev === '-' && prev2 === '-') return true; // "--"
-        return false;
-      };
-
-      const maxOffset = Math.floor(len * 0.25); // search in middle 50 percent band
-
-      for (let off = 0; off <= maxOffset; off++) {
-        const left = mid - off;
-        const right = mid + off;
-
-        if (left > 1 && left < len && isGoodPunctBoundary(left)) {
-          return left;
-        }
-        if (right > 1 && right < len && isGoodPunctBoundary(right)) {
-          return right;
-        }
-      }
-
-      // no suitable punctuation found
-      return -1;
-    }
-
-    const seg = new Intl.Segmenter(undefined, { granularity: "sentence" });
     const BLOCKS = "p, blockquote, li, h1, h2, h3, h4, h5, h6, div";
-    const bodySelectors = [
-      'section[name="articleBody"]', // NY Times
-      '#rv-article-body'             // ours
-    ];
-    let scope = null;
-    for (const selector of bodySelectors) {
-      const element = rootEl.querySelector(selector);
-      if (element) {
-        scope = element;
-        break;
-      }
-    }
+    const scope = rootEl.querySelector('section[name="articleBody"]') || rootEl.querySelector('#rv-article-body');
     if (!scope) return { texts: [], meta: [] };
 
-    // Leaf blocks only (avoid parent+child duplication)
-    const paras = Array.from(
-      scope.querySelectorAll(
-        `:is(${BLOCKS}):not(:has(${BLOCKS})):not(header *):not(footer *):not(caption *):not(figure *):not([aria-hidden] *)`
-      )
-    );
+    const paras = scope.querySelectorAll(`:is(${BLOCKS}):not(:has(${BLOCKS})):not(header *):not(footer *):not(caption *):not(figure *):not([aria-hidden] *)`);
     const texts = [];
     const meta = [];
 
-    function emitChunk(plain, el, start, end) {
-      const raw = plain.slice(start, end);
-      const leadMatch = raw.match(/^\s*/);
-      const trailMatch = raw.match(/\s*$/);
-      const lead = leadMatch ? leadMatch[0].length : 0;
-      const trail = trailMatch ? trailMatch[0].length : 0;
-
-      const s = start + lead;
-      const e = end - trail;
-      if (e <= s) return;
-
+    // Helper to push result
+    function emit(plain, el, s, e) {
       const spoken = plain.slice(s, e).trim();
       if (!spoken) return;
 
+      if (MAX_CHARS && spoken.length > MAX_CHARS) {
+        const rel = chooseVoxSplitIndex(spoken);
+        if (rel > 0 && rel < spoken.length) {
+          const splitAbs = s + rel;
+          texts.push(spoken.slice(0, rel).trim());
+          meta.push({ el, start: s, end: splitAbs });
+          texts.push(spoken.slice(rel).trim());
+          meta.push({ el, start: splitAbs, end: e });
+          return;
+        }
+      }
       texts.push(spoken);
       meta.push({ el, start: s, end: e });
     }
 
     for (const el of paras) {
-      // 1) Build "plain" from actual text nodes so offsets match Range/TreeWalker
       const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
       let plain = "";
-      let nodes = [];
-      let pos = 0;
-      let n;
-
-      while ((n = tw.nextNode())) {
-        const val = (n.nodeValue || "").replace(/\r/g, ""); // normalize CR
-        nodes.push({ node: n, start: pos, end: pos + val.length });
-        plain += val;
-        pos += val.length;
-      }
+      while (tw.nextNode()) { plain += tw.currentNode.nodeValue; }
       if (!plain) continue;
 
-      // --- 2) Segment the "plain" string but MERGE bad splits (e.g., "Dr.", "No.", etc.) ---
+      const segments = SEGMENTER.segment(plain);
+      let groupStart = -1;
+      let groupEnd = -1;
+      let pendingText = "";
 
-      // 1st pass: collect raw segments with offsets
-      let rawSegs = [];
-      for (const d of seg.segment(plain)) {
-        rawSegs.push({
-          start: d.index,
-          end: d.index + d.segment.length,
-          raw: d.segment,
-        });
-      }
+      for (const { index, segment } of segments) {
+        if (groupStart === -1) groupStart = index;
+        groupEnd = index + segment.length;
+        pendingText += segment;
 
-      // 2nd pass: merge when segment ends with known abbreviation
-      let merged = [];
-      for (let i = 0; i < rawSegs.length; i++) {
-        let cur = rawSegs[i];
+        // Determine if we should end the current group
+        const trimmed = pendingText.trim();
 
-        while (
-          endsWithAbbreviation(plain.slice(cur.start, cur.end)) &&
-          i + 1 < rawSegs.length
-        ) {
-          // merge with next segment
-          const nxt = rawSegs[i + 1];
-          cur = {
-            start: cur.start,
-            end: nxt.end,
-            raw: plain.slice(cur.start, nxt.end),
-          };
-          i++; // skip the next one
-        }
-        merged.push(cur);
-      }
-
-      // 3rd pass: trim whitespace on each merged sentence, but DO NOT push yet
-      const cleanedSegs = [];
-      for (const segm of merged) {
-        const raw = plain.slice(segm.start, segm.end);
-
-        const leadMatch = raw.match(/^\s*/);
-        const trailMatch = raw.match(/\s*$/);
-        const lead = leadMatch ? leadMatch[0].length : 0;
-        const trail = trailMatch ? trailMatch[0].length : 0;
-
-        const start = segm.start + lead;
-        const end = segm.end - trail;
-        if (end <= start) continue;
-
-        const spoken = plain.slice(start, end).trim();
-        if (!spoken) continue;
-
-        cleanedSegs.push({ start, end });
-      }
-
-      // 4th pass: coalesce adjacent segments to reach MIN_CHARS where possible
-      let i = 0;
-      while (i < cleanedSegs.length) {
-        let groupStart = cleanedSegs[i].start;
-        let groupEnd = cleanedSegs[i].end;
-        let j = i + 1;
-
-        // If this element is short overall, do not bother merging
-        const elementTextLen = plain.trim().length;
-
-        if (elementTextLen >= MIN_CHARS) {
-          // Grow the group until we reach MIN_CHARS or run out of segments
-          while (
-            plain.slice(groupStart, groupEnd).trim().length < MIN_CHARS &&
-            j < cleanedSegs.length
-          ) {
-            groupEnd = cleanedSegs[j].end;
-            j++;
+        // Check abbreviation: Fast path for "Dr.", "Mr.", etc.
+        let isAbbrev = false;
+        if (trimmed.endsWith('.')) {
+          if (RE_ABBREV_FALLBACK.test(trimmed)) isAbbrev = true;
+          else {
+            const m = trimmed.match(RE_ABBREV_MATCH);
+            if (m && ABBREV.has(m[1])) isAbbrev = true;
           }
         }
 
-        const chunkStr = plain.slice(groupStart, groupEnd).trim();
-
-        if (MAX_CHARS && chunkStr.length > MAX_CHARS) {
-          const rel = chooseVoxSplitIndex(chunkStr);
-          if (rel > 0 && rel < chunkStr.length) {
-            const splitAbs = groupStart + rel;
-            // first half
-            emitChunk(plain, el, groupStart, splitAbs);
-            // second half
-            emitChunk(plain, el, splitAbs, groupEnd);
-          } else {
-            // no good punctuation to split on; keep as one
-            emitChunk(plain, el, groupStart, groupEnd);
-          }
-        } else {
-          // non Vox or short enough
-          emitChunk(plain, el, groupStart, groupEnd);
+        // Only emit if not an abbreviation AND we meet the length requirement
+        if (!isAbbrev && trimmed.length >= MIN_CHARS) {
+          emit(plain, el, groupStart, groupEnd);
+          groupStart = -1;
+          pendingText = "";
         }
+      }
 
-        i = j;
+      // Emit any remaining text in the paragraph
+      if (groupStart !== -1) {
+        emit(plain, el, groupStart, groupEnd);
       }
     }
 
     return { texts, meta };
   }
 
+  function refreshSegments(contentHostEl) {
+    // Remember the current position to restore it after re-segmenting
+    let savedEl = null;
+    let savedOffset = 0;
+    if (tts.prepared && tts.meta[tts.index]) {
+      savedEl = tts.meta[tts.index].el;
+      savedOffset = tts.meta[tts.index].start;
+    }
+
+    // Clear existing highlights before re-segmenting
+    clearHighlight();
+
+    // Perform segmentation with current server's MIN/MAX constraints
+    const { texts, meta } = segmentSentences(contentHostEl);
+    tts.texts = texts;
+    tts.meta = meta;
+    tts.segments = new Array(texts.length).fill(0);
+    tts.prepared = true;
+
+    // Try to restore the reading index
+    if (savedEl) {
+      const newIdx = tts.meta.findIndex(m => m.el === savedEl && m.start >= savedOffset);
+      tts.index = newIdx !== -1 ? newIdx : 0;
+    } else {
+      tts.index = 0;
+    }
+
+    // Update UI
+    highlightCurrent(tts.index);
+    setStatus(`Ready (${tts.segments.length} segments)`);
+  }
 
   // --------------------------
   // Main toggle function
@@ -851,28 +803,22 @@
     // --- Segmentation and Progress restoration logic ---
     const contentHostEl = container.querySelector("#rv-content");
 
-    // Perform segmentation now
-    const { texts, meta } = segmentSentences(contentHostEl);
-    const currentSegmentCount = texts.length;
-
-    tts.texts = texts;
-    tts.meta = meta;
-    tts.segments = new Array(currentSegmentCount).fill(0);
-    tts.prepared = true; // Mark as prepared now
-
     let progressRestored = false;
     const savedProgress = prefs.readingProgress[currentPageUrl];
 
+    refreshSegments(contentHostEl);
+    const currentSegmentCount = tts.segments.length;
     // Check if the saved progress is for a long page and the index is valid
     if (savedProgress?.segments >= LONG_PAGE_THRESHOLD && savedProgress.index > 0) {
       // Only restore if the total number of segments hasn't changed drastically (e.g., +/- 10%)
       if (Math.abs(savedProgress.segments - currentSegmentCount) < currentSegmentCount * 0.1) {
         // Restore the index (other tts properties are already set)
         tts.index = Math.min(savedProgress.index, currentSegmentCount - 1); // Clamp index
-
         // Jumps the view to the last read position
-        highlightCurrent(tts.index);
-        setStatus(`Ready (Progress: ${tts.index + 1} / ${currentSegmentCount})`);
+        setTimeout(() => {
+          highlightCurrent(tts.index);
+          setStatus(`Ready (Progress: ${tts.index + 1} / ${currentSegmentCount})`);
+        }, 250);
         progressRestored = true;
       } else {
         // If the article changed, remove the stale progress
@@ -955,6 +901,8 @@
               invalidateAudio(false);
               tts.server = newServer;
               prefs.server = newServer;
+              const contentHostEl = overlay.querySelector("#rv-content");
+              refreshSegments(contentHostEl);
               speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
               speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
               updateRatingDisplay();

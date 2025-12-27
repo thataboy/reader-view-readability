@@ -77,6 +77,14 @@
       color: #e8e8e8;
     }
 }
+
+/* Toolbar Reset: Prevents host page CSS from breaking the layout */
+#rv-toolbar, #rv-toolbar * {
+    box-sizing: border-box !important;
+    line-height: normal !important;
+    vertical-align: middle;
+}
+
 #rv-toolbar {
     position: sticky;
     top: 0;
@@ -85,8 +93,9 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 0 4px;
-    margin-top: 3px;
+    margin: 0;
     padding: 0 10px;
+    min-height: 40px;
     background: var(--rv-panel);
     border: 1px solid var(--rv-border);
     backdrop-filter: saturate(120%) blur(6px);
@@ -115,20 +124,12 @@
     background: black;
     color: white;
 }
-#rv-toolbar .rv-group {
-    display: inline-flex;
-    gap: 4px;
-}
 #rv-toolbar .rv-radio {
-    display: inline-flex;
-    vertical-align: middle;
+    vertical-align: top !important;
 }
 .rv-inline {
     display: inline-flex;
-}
-.rv-spacer {
-    flex: 1 1 auto;
-    min-width: 0;
+    align-items: center;
 }
 #rv-surface {
     position: fixed;
@@ -165,8 +166,9 @@
 #rv-surface::-webkit-scrollbar-corner {
     background: transparent;
 }
-#rv-voice {
+#rv-servers {
     margin-left: 8px;
+    margin-right: 8px;
 }
 #rv-speed {
     width: 120px;
@@ -177,10 +179,15 @@ html.rv-active,
 html.rv-active body {
     overflow: hidden !important;
 }
-#rv-tts {
+#rv-tts, #rv-format {
     display: flex;
     flex-wrap: nowrap;
+    align-items: center; /* Ensures stars, select, and labels are centered */
     gap: 0 4px;
+}
+#rv-format {
+    margin-left: auto;
+    margin-right: 8px;
 }
 .rv-tts-active {
     background: rgba(255, 255, 0, 0.3) !important;
@@ -190,11 +197,15 @@ html.rv-active body {
     width: auto;
     height: auto;
     font-size: 14px;
+    margin: 0;
 }
 #rv-toolbar label {
     font-size: 14px;
     margin-left: 2px;
     margin-right: 10px;
+    display: inline-flex;
+    align-items: center;
+    vertical-align: text-bottom;
 }
 #rv-tts-status,
 #rv-speed-label {
@@ -223,6 +234,9 @@ html.rv-active body {
     user-select: none;
     white-space: nowrap;
     direction: rtl; /* FLIPS the star order (3-2-1) to visually be 1-2-3 for hover trick */
+    display: inline-flex; /* Use flex to control alignment */
+    align-items: center;
+    height: 100%;
 }
 .rv-rating-star {
     color: #ddd; /* Default color for unlit stars (which use the ★ character) */

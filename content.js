@@ -66,7 +66,7 @@
     highlightSpan: null, // active <span> wrapper for current sentence
   };
 
-  const LONG_PAGE_THRESHOLD = 200;  // Minimum segments to consider a page "long"
+  const LONG_PAGE_THRESHOLD = 150;  // Minimum segments to consider a page "long"
   const MAX_SAVED_PAGES = 50;       // Max number of saved reading positions
   const currentPageUrl = window.location.href.split(/[?#]/)[0]; // Use URL without query/hash
 
@@ -439,32 +439,30 @@
     container.innerHTML = `
       <div id="rv-surface" role="dialog" aria-label="Reader View" tabindex="-1">
         <div id="rv-toolbar">
-          <button class="rv-btn" id="rv-close" title="Close"><img></button>
-          <div class="rv-group">
+          <button class="rv-btn" id="rv-close" title="Exit"><img></button>
+          <div id="rv-tts">
+            <div id="rv-servers"></div>
+            <select id="rv-voice" title="Voice"></select>
+            <div id="rv-rating-control" class="rv-rating-control" title="Rate the selected voice (0-3 stars)"></div>
+            <label class="rv-inline" title="Speed">
+            <input id="rv-speed" type="range" min="0.7" max="1.5" step="0.05" value="1.0" />
+            </label>
+            <span id="rv-speed-label"></span>
+            <button class="rv-btn" id="rv-tts-play" title="Speak"><img></button>
+            <div id="rv-tts-controls" style="display:none">
+            <button class="rv-btn" id="rv-tts-stop" title="Stop"><img></button>
+            <button class="rv-btn" id="rv-tts-prevp" title="Previous paragraph"><img></button>
+            <button class="rv-btn" id="rv-tts-prev" title="Previous sentence"><img></button>
+            <button class="rv-btn" id="rv-tts-next" title="Next sentence"><img></button>
+            <button class="rv-btn" id="rv-tts-nextp" title="Next paragraph"><img></button>
+            </div>
+            <span id="rv-tts-status"></span>
+          </div>
+          <div id="rv-format">
             <button class="rv-btn" id="rv-font-inc" title="Increase font"><img></button>
             <button class="rv-btn" id="rv-font-dec" title="Decrease font"><img></button>
             <button class="rv-btn" id="rv-width-widen" title="Widen page"><img></button>
             <button class="rv-btn" id="rv-width-narrow" title="Narrow page"><img></button>
-          </div>
-          <div class="rv-spacer">
-            <div id="rv-tts">
-              <div id="rv-servers"></div>
-              <select id="rv-voice" title="Voice"></select>
-              <div id="rv-rating-control" class="rv-rating-control" title="Rate the selected voice (0-3 stars)"></div>
-              <label class="rv-inline" title="Speed">
-              <input id="rv-speed" type="range" min="0.7" max="1.5" step="0.05" value="1.0" />
-              </label>
-              <span id="rv-speed-label"></span>
-              <button class="rv-btn" id="rv-tts-play" title="Speak"><img></button>
-              <div id="rv-tts-controls" style="display:none">
-              <button class="rv-btn" id="rv-tts-stop" title="Stop"><img></button>
-              <button class="rv-btn" id="rv-tts-prevp" title="Previous paragraph"><img></button>
-              <button class="rv-btn" id="rv-tts-prev" title="Previous sentence"><img></button>
-              <button class="rv-btn" id="rv-tts-next" title="Next sentence"><img></button>
-              <button class="rv-btn" id="rv-tts-nextp" title="Next paragraph"><img></button>
-              </div>
-              <span id="rv-tts-status"></span>
-            </div>
           </div>
         </div>
         <div id="rv-content">

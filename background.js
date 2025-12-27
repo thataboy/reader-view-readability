@@ -55,7 +55,7 @@ function arrayBufferToBase64(buffer) {
 }
 
 function generateSilenceWav() {
-  const sampleRate = 24000;
+  const sampleRate = 44100;
   const duration = 0.5;
   const numChannels = 1;
   const bitsPerSample = 16;

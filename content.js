@@ -74,7 +74,7 @@
   function ttsKey(i){ return `${sig()}:${i}`; }
   function ensureCtx() {
     if (!tts.audioCtx || tts.audioCtx.state === "closed") {
-      tts.audioCtx = new (AudioContext || webkitAudioContext)({ sampleRate: 24000 });
+      tts.audioCtx = new (AudioContext || webkitAudioContext)({ sampleRate: 44100 });
     }
     return tts.audioCtx;
   }
@@ -140,7 +140,7 @@
             payload: {
               signature,
               out_of_order: i !== tts.index && !tts.decoded.has(ttsKey(tts.index)),
-              fast: i === tts.index,
+              fast: false, // i === tts.index,
               text: tts.texts[i],
               voice: tts.voice,
               speed: tts.speed,
@@ -156,9 +156,9 @@
         const ab = decodeBuffer(i, buf);
         setStatus();
         return ab;
-      } catch (err) {
-        setStatus(`Error: ${err.message}`);
-        throw err;
+      // } catch (err) {
+      //   // setStatus(`Error: ${err.message}`);
+      //   throw err;
       } finally {
         tts.inFlight.delete(k);
       }
@@ -214,7 +214,7 @@
       src.buffer = cur;
       src.connect(ctx.destination);
       tts.playing = true;
-      src.start(0, 0);
+      src.start();
       setStatus(`Playing ${tts.index + 1} / ${tts.segments.length}`);
       highlightReading();
       chrome.runtime.sendMessage({
@@ -267,6 +267,7 @@
       type: "tts.cancel",
       payload: { server: tts.server }
     }) } catch {}
+    highlightReading();
     setStatus("Ready");
   }
 
@@ -343,6 +344,7 @@
       // Case 2: fallback where we just added a class to an existing element
       target.classList.remove("rv-tts-highlight");
       target.classList.remove("rv-tts-reading");
+      target.classList.remove("rv-tts-inactive");
     }
 
     tts.highlightSpan = null;
@@ -380,10 +382,12 @@
       span.appendChild(contents);
       r.insertNode(span);
       tts.highlightSpan = span;
+      if (!tts.playing) span.classList.add("rv-tts-inactive");
       span.scrollIntoView({ block: "center", behavior: "smooth" });
     } catch (e) {
       // Fallback: just highlight the whole paragraph/element
-      m.el.classList.add("rv-tts-highlight");
+      m.el.classList.add(className);
+      if (!tts.playing) span.classList.add("rv-tts-inactive");
       tts.highlightSpan = m.el;
       m.el.scrollIntoView({ block: "center", behavior: "smooth" });
     }
@@ -392,7 +396,11 @@
   function highlightReading() {
     const target = tts.highlightSpan;
     if (!target) return;
-    target.classList.add("rv-tts-reading");
+    if (tts.playing) target.classList.add("rv-tts-reading");
+    else {
+      target.classList.remove("rv-tts-reading");
+      target.classList.add("rv-tts-inactive");
+    }
   }
 
 

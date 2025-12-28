@@ -22,7 +22,7 @@
   // Storage helpers
   // --------------------------
   const STORAGE_KEY = "rv_prefs_v1";
-  const defaults = { fontSize: 17, maxWidth: 860, voice: {}, speed: 1.0, server: Server.VOX_ANE, voiceRatings: {}, readingProgress: {} };
+  const defaults = { fontSize: 17, maxWidth: 860, voice: {}, speed: 1.0, server: Server.VOX_ANE, voiceRatings: {}, readingProgress: {}, autoScroll: true };
   async function loadPrefs() {
     try {
       const out = await chrome.storage.local.get(STORAGE_KEY);
@@ -62,6 +62,7 @@
     btnStop: null,
     btnNext: null,
     controls: null,      // button group not including Play
+    scrl: null,          // auto scroll checkbox
     meta: [],            // [{el,start,end}] parallel to tts.texts[index]
     highlightSpan: null, // active <span> wrapper for current sentence
   };
@@ -313,13 +314,6 @@
     });
   } catch {}
 
-  window.addEventListener("keydown", (e) => {
-    if (e.altKey && e.key.toLowerCase() === "r") { e.preventDefault(); toggle(); }
-    if (e.altKey && e.keyCode === 32 && tts?.btnPlay) {
-      if (tts.playing) tts.btnStop.click(); else tts.btnPlay.click();
-    }
-  }, true);
-
   function setIcon(btn_id, file) {
     const btn = document.getElementById(btn_id);
     const img = btn && btn.querySelector("img");
@@ -383,13 +377,13 @@
       r.insertNode(span);
       tts.highlightSpan = span;
       if (!tts.playing) span.classList.add("rv-tts-inactive");
-      span.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (tts.scrl.checked) span.scrollIntoView({ block: "center", behavior: "smooth" });
     } catch (e) {
       // Fallback: just highlight the whole paragraph/element
-      m.el.classList.add(className);
+      m.el.classList.add("rv-tts-highlight");
       if (!tts.playing) span.classList.add("rv-tts-inactive");
       tts.highlightSpan = m.el;
-      m.el.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (tts.scrl.checked) m.el.scrollIntoView({ block: "center", behavior: "smooth" });
     }
   }
 
@@ -467,6 +461,7 @@
             <span id="rv-tts-status"></span>
           </div>
           <div id="rv-format">
+            <input id="rv-scrl" type="checkbox"/><label for="rv-scrl">AutoScroll </label>
             <button class="rv-btn" id="rv-font-inc" title="Increase font"><img></button>
             <button class="rv-btn" id="rv-font-dec" title="Decrease font"><img></button>
             <button class="rv-btn" id="rv-width-widen" title="Widen page"><img></button>
@@ -507,6 +502,7 @@
     tts.btnStop = container.querySelector("#rv-tts-stop");
     tts.btnNext = container.querySelector("#rv-tts-next");
     tts.controls = container.querySelector("#rv-tts-controls");
+    tts.scrl = container.querySelector("#rv-scrl");
     setStatus("Ready");
 
     const outside = Array.from(document.body.children).filter(n => n !== container);
@@ -517,7 +513,7 @@
     async function cleanup() {
       await saveReadingProgress(prefs);
       stopPlayback();
-      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("keyup", onKey, true);
       document.removeEventListener("copy", onCopy, true);
       outside.forEach(n => { try { n.removeAttribute("inert"); } catch(_){} });
       document.documentElement.classList.remove("rv-active");
@@ -550,12 +546,16 @@
       const accel = (e.metaKey || e.ctrlKey);
       if (accel && e.key.toLowerCase() === "a") { e.preventDefault(); selectTarget(); }
       if (e.key === "Escape") cleanup();
-      if (e.altKey && (e.key === "+" || e.key === "=")) {
+      if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+      if (e.keyCode == 32 && e.altKey || e.keyCode == 119 & !e.altKey) { // alt+space or f8
+        if (tts.playing) tts.btnStop.click(); else tts.btnPlay.click();
+      }
+      if (!e.altKey) return;
+      if (e.keyCode == 187) {
         prefs.fontSize = Math.min(32, prefs.fontSize + 1);
         surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
         savePrefs(prefs);
-      }
-      if (e.altKey && (e.key === "-" || e.key === "_")) {
+      } else if (e.keyCode == 189) {
         prefs.fontSize = Math.max(12, prefs.fontSize - 1);
         surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
         savePrefs(prefs);
@@ -599,7 +599,7 @@
       savePrefs(prefs);
     });
 
-    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("keyup", onKey, true);
     document.addEventListener("copy", onCopy, true);
     document.documentElement.appendChild(container);
     surface.focus();
@@ -877,6 +877,7 @@
     const btnPrevP = overlay.querySelector("#rv-tts-prevp");
     const btnNextP = overlay.querySelector("#rv-tts-nextp");
     const ratingControl = overlay.querySelector("#rv-rating-control");
+    const scrl = overlay.querySelector("#rv-scrl");
 
     if (!voiceEl || !speedInp || !ratingControl) return;
 
@@ -971,6 +972,7 @@
     speedInp.value = prefs.speed;
     tts.speed = prefs.speed;
     speedLabel.textContent = `${speedInp.value}x`;
+    scrl.checked = prefs.autoScroll;
 
     function getCurrentRating() {
         return prefs.voiceRatings?.[tts.server]?.[tts.voice] || 0;
@@ -1035,6 +1037,13 @@
         savePrefs(prefs);
         invalidateAudio(false);
       }
+    });
+
+    scrl.addEventListener("change", () => {
+      prefs.autoScroll = scrl.checked;
+      savePrefs(prefs);
+      highlightCurrent(tts.index);
+      highlightReading();
     });
 
     function playAt(idx) {

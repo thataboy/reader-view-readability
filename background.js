@@ -97,9 +97,10 @@ function generateSilenceWav() {
 function sanitize(text) {
   text = text?.trim();
   if (!text) return null;
+  // Vox freaks out if text is all caps
+  if (/^[^a-z]*[A-Z][^a-z]*$/.test(text)) text = text.toLowerCase();
   return text
-    .replace(/[()[\]|~`/—…]/g, ' ')
-    .replace(/\-/g, ' ')
+    .replace(/[()[\]|~`/…]/g, ' ')
     // .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
     .replace(/[“”"]/g, ' ')
     // .replace(/[‘’]/g, "'")
@@ -114,8 +115,8 @@ function sanitize(text) {
     // .replace(/(["”’'])\s*\.?\s*$/, '')
     // .replace(/\s+([”’])/g, '$1')
     // .replace(/([‘“])\s+/g, '$1')
-    .replace(/(\s*[,!:;]\s*)+$/, '')
-    .replace(/^(\s*[,!:;]\s*)+/, '')
+    // .replace(/(\s*[,!:;]\s*)+$/, '')
+    // .replace(/^(\s*[,!:;]\s*)+/, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -165,7 +166,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           body: JSON.stringify({
             input,
             voice,
-            "inference_timesteps": fast ? 5 : 10,
+            "inference_timesteps": fast ? 7 : 10,
             "response_format": "wav"
           })
         }) :

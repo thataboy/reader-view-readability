@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Readability + TTS",
   "version": "1.0.0",
-  "description": "Xibi's reader view using readability.js + TTS",
+  "description": "Reader view using readability.js + TTS",
   "permissions": [
     "activeTab",
     "scripting",

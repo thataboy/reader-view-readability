@@ -121,6 +121,33 @@ function sanitize(text) {
     .trim();
 }
 
+// Initialized once in the outer scope
+const ABBREVIATION_MAP = {
+  "Mr.": "Mister",
+  "Mrs.": "Misses",
+  "Ms.": "Miss",
+  "Dr.": "Doctor",
+  "V.": "versus",
+  "v.": "versus",
+  "Prof.": "Professor",
+  "Sr.": "Senior",
+  "Jr.": "Junior",
+  "St.": "Saint"
+};
+
+// Escape dots and join keys into a single regex pattern
+const ABBR_REGEX = new RegExp(
+  Object.keys(ABBREVIATION_MAP)
+    .map(k => k.replace('.', '\\.'))
+    .join('|') + '(?=\\s|$|\\b)',
+  'g'
+);
+
+function expandAbbreviations(text) {
+  if (!text) return text;
+  return text.replace(ABBR_REGEX, (matched) => ABBREVIATION_MAP[matched]);
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.type) {
     sendResponse({ ok: false, error: "Invalid message" });
@@ -154,6 +181,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true, base64: b64 });
           return
         }
+        input = expandAbbreviations(input);
         const r = (server == Server.SUPERTONIC) ?
         await fetch(`${TTS_SERVER.get(server)}/synthesize`, {
           method: "POST",

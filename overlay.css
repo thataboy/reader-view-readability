@@ -181,11 +181,15 @@ html.rv-active body {
 }
 #rv-tts, #rv-format {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     align-items: center; /* Ensures stars, select, and labels are centered */
     gap: 0 4px;
 }
+#rv-tts-controls {
+    flex-wrap: nowrap;
+}
 #rv-format {
+    flex-wrap: nowrap;
     margin-left: auto;
     margin-right: 8px;
 }

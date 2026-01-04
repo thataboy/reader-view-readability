@@ -439,8 +439,8 @@
     container.innerHTML = `
       <div id="rv-surface" role="dialog" aria-label="Reader View" tabindex="-1">
         <div id="rv-toolbar">
-          <button class="rv-btn" id="rv-close" title="Exit"><img></button>
           <div id="rv-tts">
+            <button class="rv-btn" id="rv-close" title="Exit"><img></button>
             <div id="rv-servers"></div>
             <select id="rv-voice" title="Voice"></select>
             <div id="rv-rating-control" class="rv-rating-control" title="Rate the selected voice (0-3 stars)"></div>
@@ -608,10 +608,12 @@
     setupTTSControls(container, contentHost, prefs);
   }
 
+  const BLOCKS = "p, div, blockquote, li, h1, h2, h3, h4, h5, h6";
+
   // Pre-compile regexes and moves constants outside for performance
   const ABBREV = new Set([
     "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",
-    "No", "Fig", "Rev", "Sen", "Capt", "Sgt", "Col", "Adm",
+    "V", "v","Fig", "Rev", "Sen", "Capt", "Sgt", "Col", "Adm",
     "U.S", "U.K", "A.M", "P.M", "a.m", "p.m", "e.g", "i.e", "Vs", "vs", "cf",
     "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug",
     "Sep", "Sept", "Oct", "Nov", "Dec",
@@ -620,16 +622,6 @@
   const RE_ABBREV_FALLBACK = /[^A-Z.]([A-Z]\.)+$/;
   const RE_ABBREV_MATCH = /[^A-Za-z.]([A-Za-z.]+)\.$/;
   const SEGMENTER = new Intl.Segmenter(undefined, { granularity: "sentence" });
-
-  // Helper: does segment end with an abbreviation?
-  function endsWithAbbreviation(str) {
-    // Strip trailing quotes/paren
-    const cleaned = str.trim(); //.replace(/['"”’)\]]+$/, "");
-    if (cleaned.match(/[^A-Z.]([A-Z]\.)+$/)) return true;
-    const m = cleaned.match(/[^A-Za-z.]([A-Za-z.]+)\.$/);
-    if (!m) return false;
-    return ABBREV.has(m[1]);
-  }
 
   // Helper: choose a split index (within str) for Vox long chunks.
   // Only split at ",", ";" or "--" near the middle. If nothing found, return -1.
@@ -672,7 +664,6 @@
     const MIN_CHARS = isVox ? 35 : (isSuper ? 20 : 150);
     const MAX_CHARS = isVox ? 200 : (isSuper ? 600 : 300);
 
-    const BLOCKS = "p, blockquote, li, h1, h2, h3, h4, h5, h6, div";
     const scope = rootEl.querySelector('section[name="articleBody"]') || rootEl.querySelector('#rv-article-body');
     if (!scope) return { texts: [], meta: [] };
 
@@ -1132,12 +1123,11 @@
 
     function findIdxAtClick(e) {
       // Start from a visible block near the click
-      const blocks = "p,li,blockquote,h1,h2,h3,h4,h5,h6,div";
-      const base = e.target.closest(blocks);
+      const base = e.target.closest(BLOCKS);
       if (!base) return null;
 
       // Snap to our LEAF block (same rule used in segmentSentences)
-      const leafSel = `:is(${blocks}):not(:has(${blocks}))`;
+      const leafSel = `:is(${BLOCKS}):not(:has(${BLOCKS}))`;
       const leafEl = base.closest(leafSel);
       if (!leafEl) return null;
 

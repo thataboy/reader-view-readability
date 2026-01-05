@@ -215,9 +215,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       if (msg.type === "tts.cancel") {
         const { server } = msg.payload;
-        try {
-          fetch(`${TTS_SERVER.get(server)}/v1/audio/speech/cancel`, { method: "POST" });
-        } catch {}
+        fetch(`${TTS_SERVER.get(server)}/v1/audio/speech/cancel`, { method: "POST" }).catch(() => {});
         sendResponse({ ok: true });
         return;
       }

@@ -7,15 +7,15 @@
   // Server definitions
   // --------------------------
   const Server = Object.freeze({
-      // MY_KOKORO: 1,
+      MY_KOKORO: 1,
       VOX_ANE: 2,
       SUPERTONIC: 3
   });
 
-  const SERVER_NAME = new Map([
-    // [Server.MY_KOKORO, 'Kokoro'],
-    [Server.VOX_ANE, 'Vox'],
-    [Server.SUPERTONIC, 'SuperT']
+  const SERVERS = new Map([
+    [Server.MY_KOKORO, {name: 'Kokoro', active: false, voices: ["ax_liam", "af_heart"]}],
+    [Server.VOX_ANE, {name: 'Vox', active: true, voices: ["adam", "dorothy"]}],
+    [Server.SUPERTONIC, {name: 'SuperT', active: true, voices: ["F1", "M1"]}]
   ]);
 
   // --------------------------
@@ -344,7 +344,7 @@
     const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
     let cur = 0, startNode=null, startOff=0, endNode=null, endOff=0, n;
     while (n = tw.nextNode()) {
-      if (n.parentElement?.closest('sup')) continue;
+      if (n.parentElement?.closest('sup') || n.parentElement?.closest('label')) continue;
       const len = n.nodeValue.length, next = cur + len;
       if (startNode == null && start >= cur && start <= next) { startNode = n; startOff = start - cur; }
       if (endNode == null && end >= cur && end <= next) { endNode = n; endOff = end - cur; }
@@ -422,7 +422,7 @@
     const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
     let cur = 0, n;
     while (n = tw.nextNode()) {
-      if (n.parentElement?.closest('sup')) continue;
+      if (n.parentElement?.closest('sup') || n.parentElement?.closest('label')) continue;
       if (n === r.startContainer) {
         return cur + Math.min(r.startOffset, n.nodeValue.length);
       }
@@ -491,7 +491,7 @@
     surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
     contentHost.style.setProperty("--rv-font-family", 'Verdana,Geneva,Helvetica,sans-serif');
     contentHost.style.setProperty("--rv-maxw", `${prefs.maxWidth}px`);
-    if (prefs.server && SERVER_NAME.get(prefs.server)) tts.server = prefs.server;
+    if (prefs.server && SERVERS.has(prefs.server)) tts.server = prefs.server;
 
     // save status element
     tts.voiceEl = container.querySelector("#rv-voice");
@@ -608,7 +608,7 @@
     setupTTSControls(container, contentHost, prefs);
   }
 
-  const BLOCKS = "p, div, blockquote, li, h1, h2, h3, h4, h5, h6";
+  const BLOCKS = "p, div, blockquote, li, h1, h2, h3, h4, h5, h6, pre";
 
   // Pre-compile regexes and moves constants outside for performance
   const ABBREV = new Set([
@@ -635,7 +635,9 @@
       // we split "after" i - 1
       const prev = str[i - 1];
       const prev2 = str[i - 2];
-      if ([',', ';', '—'].includes(prev)) return true;
+      // split on , but not in number like 10,000
+      if (prev === ',' && !/[0-9]/.test(str[i])) return true;
+      if ([';', '—'].includes(prev)) return true;
       if (prev === '-' && prev2 === '-') return true; // "--"
       return false;
     };
@@ -695,7 +697,7 @@
       const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
       let plain = "";
       while (n = tw.nextNode()) {
-        if (n.parentElement?.closest('sup')) continue;
+        if (n.parentElement?.closest('sup') || n.parentElement?.closest('label')) continue;
         plain += tw.currentNode.nodeValue;
       }
       if (!plain) continue;
@@ -881,18 +883,19 @@
     speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
 
     const serversDiv = overlay.querySelector('#rv-servers');
-    for (const [serverValue, serverName] of SERVER_NAME.entries()) {
+    for (const [id, server] of SERVERS.entries()) {
+      if (!server.active) continue;
       const radioInput = document.createElement('input');
       radioInput.type = 'radio';
-      radioInput.id = `server-${serverValue}`;
+      radioInput.id = `server-${id}`;
       radioInput.name = 'tts_server';
-      radioInput.value = serverValue;
-      radioInput.checked = serverValue == tts.server;
+      radioInput.value = id;
+      radioInput.checked = id == tts.server;
       radioInput.className = 'rv-radio';
 
       const radioLabel = document.createElement('label');
-      radioLabel.htmlFor = `server-${serverValue}`;
-      radioLabel.textContent = serverName;
+      radioLabel.htmlFor = `server-${id}`;
+      radioLabel.textContent = server.name;
 
       serversDiv.appendChild(radioInput);
       serversDiv.appendChild(radioLabel);
@@ -917,13 +920,6 @@
 
     async function loadVoiceList() {
       const serverVoiceRatings = prefs.voiceRatings[tts.server] || {};
-
-      // Fallback set if server fails (only used if fetch errors)
-      const fallback = new Map([
-        // [Server.MY_KOKORO, ["ax_liam", "af_heart", "af_kore"]],
-        [Server.VOX_ANE, ["adam", "dorothy"]],
-        [Server.SUPERTONIC, ["F1", "M1"]]
-      ]);
       let voices = [];
       try {
         const res = await chrome.runtime.sendMessage({
@@ -934,7 +930,7 @@
         else console.log(res?.error || "voices fetch failed");
       } finally {
         // Use fallback if API failed or returned empty
-        voices = voices.length ? voices : (fallback.get(tts.server) || []);
+        voices = voices.length ? voices : (SERVERS.get(tts.server).voices || []);
 
         // 1. Prepare for sorting
         let voiceData = voices.map(v => ({

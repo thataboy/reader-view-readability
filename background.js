@@ -56,7 +56,7 @@ function arrayBufferToBase64(buffer) {
 
 function generateSilenceWav() {
   const sampleRate = 44100;
-  const duration = 0.5;
+  const duration = 0.1;
   const numChannels = 1;
   const bitsPerSample = 16;
   const byteLength = sampleRate * duration * numChannels * (bitsPerSample / 8);
@@ -94,7 +94,7 @@ function generateSilenceWav() {
 }
 
 // fix a bunch of weird quirks with VoxCPM
-function sanitize(text) {
+function sanitizeVox(text) {
   text = text?.trim();
   if (!text) return null;
   // Vox freaks out if text is all caps
@@ -148,6 +148,31 @@ function expandAbbreviations(text) {
   return text.replace(ABBR_REGEX, (matched) => ABBREVIATION_MAP[matched]);
 }
 
+/**
+ * Normalizes a string by converting special characters/accents
+ * to their closest ASCII equivalents.
+ */
+const manualMap = {
+  'ø': 'o', 'Ø': 'O',
+  'æ': 'ae', 'Æ': 'AE',
+  'œ': 'oe', 'Œ': 'OE',
+  'ß': 'ss', 'ł': 'l', 'Ł': 'L'
+};
+function sanitizeSupertonic(str) {
+  if (!str) return "";
+  return str
+    .replace(/[><()\[\]^]/g, ' ')
+    // remove emojis
+    // .replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, "")
+    // normalize special chars
+    .replace(/[øØæÆœŒßłŁ]/g, match => manualMap[match])
+    // Use NFD normalization to decompose accents (e.g., 'é' -> 'e' + '´')
+    // .normalize("NFD")
+    // Use Regex to remove the "Combining Diacritical Marks" (the accents)
+    // .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.type) {
     sendResponse({ ok: false, error: "Invalid message" });
@@ -165,7 +190,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       if (msg.type === "tts.synthesize") {
-        const { signature, out_of_order, fast, text, voice, speed, server } = msg.payload || {};
+        const { signature, out_of_order, fast, text, lang, voice, speed, server } = msg.payload || {};
         if (signature !== `${server}|${voice}|${speed}`) {
           sendResponse({ error: `mismatched ${signature}`});
           return
@@ -174,8 +199,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ error: 'out_of_order'});
           return
         }
-        let input = (server == Server.VOX_ANE) ? sanitize(text) : text?.trim();
-        if (!input || server == Server.VOX_ANE && input.length < 5) {
+        let input = (server == Server.VOX_ANE) ? sanitizeVox(text)
+                    : (server == Server.SUPERTONIC) ? sanitizeSupertonic(text)
+                    : text?.trim();
+        if (!input || input.length < 5) {
           const buf = generateSilenceWav();
           const b64 = arrayBufferToBase64(buf);
           sendResponse({ ok: true, base64: b64 });
@@ -186,7 +213,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await fetch(`${TTS_SERVER.get(server)}/synthesize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ input, voice, speed })
+          body: JSON.stringify({ input, voice, speed, lang })
         }) : (server == Server.VOX_ANE) ?
         await fetch(`${TTS_SERVER.get(server)}/v1/audio/speech`, {
           method: "POST",

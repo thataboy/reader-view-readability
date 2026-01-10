@@ -13,16 +13,16 @@
   });
 
   const SERVERS = new Map([
-    [Server.MY_KOKORO, {name: 'Kokoro', active: false, voices: ["ax_liam", "af_heart"]}],
-    [Server.VOX_ANE, {name: 'Vox', active: true, voices: ["adam", "dorothy"]}],
-    [Server.SUPERTONIC, {name: 'SuperT', active: true, voices: ["F1", "M1"]}]
+    [Server.MY_KOKORO, {name: 'Kokoro', active: false, voices: ["ax_liam", "af_heart"], speed: 1.0}],
+    [Server.VOX_ANE, {name: 'Vox', active: true, voices: ["adam", "dorothy"], speed: 1.0}],
+    [Server.SUPERTONIC, {name: 'SuperT', active: true, voices: ["F1", "M1"], speed: 1.2}]
   ]);
 
   // --------------------------
   // Storage helpers
   // --------------------------
   const STORAGE_KEY = "rv_prefs_v1";
-  const defaults = { fontSize: 17, maxWidth: 860, voice: {}, speed: 1.0, server: Server.VOX_ANE, voiceRatings: {}, readingProgress: {}, autoScroll: true };
+  const defaults = { fontSize: 17, maxWidth: 860, server: Server.VOX_ANE, voice: {}, speeds: {}, ratings: {}, readingProgress: {}, autoScroll: true };
   async function loadPrefs() {
     try {
       const out = await chrome.storage.local.get(STORAGE_KEY);
@@ -55,7 +55,7 @@
     currentSrc: null,
     playToken: 0,
     prefetchAhead: 4,    // # TTS segments to prefetch
-    keepBehind: 1,
+    keepBehind: 3,
     statusEl: null,      // status label
     voiceEl: null,       // voice list control
     btnPlay: null,
@@ -70,6 +70,7 @@
   const LONG_PAGE_THRESHOLD = 150;  // Minimum segments to consider a page "long"
   const MAX_SAVED_PAGES = 50;       // Max number of saved reading positions
   const currentPageUrl = window.location.href.split(/[?#]/)[0]; // Use URL without query/hash
+  const _lang = (document.documentElement.lang || 'en').substring(0, 2).toLowerCase();
 
   function sig(){ return `${tts.server}|${tts.voice}|${tts.speed}`; }
   function ttsKey(i){ return `${sig()}:${i}`; }
@@ -142,6 +143,7 @@
               out_of_order: i !== tts.index && !tts.decoded.has(ttsKey(tts.index)),
               fast: i === tts.index,
               text: tts.texts[i],
+              lang: _lang,
               voice: tts.voice,
               speed: tts.speed,
               server: tts.server
@@ -663,7 +665,7 @@
   function segmentSentences(rootEl) {
     const isVox = tts.server == Server.VOX_ANE;
     const isSuper = tts.server == Server.SUPERTONIC;
-    const MIN_CHARS = isVox ? 35 : (isSuper ? 20 : 150);
+    const MIN_CHARS = isVox ? 35 : (isSuper ? 100 : 150);
     const MAX_CHARS = isVox ? 200 : (isSuper ? 600 : 300);
 
     const scope = rootEl.querySelector('section[name="articleBody"]') || rootEl.querySelector('#rv-article-body');
@@ -919,7 +921,7 @@
     }
 
     async function loadVoiceList() {
-      const serverVoiceRatings = prefs.voiceRatings[tts.server] || {};
+      const serverVoiceRatings = prefs.ratings[tts.server] || {};
       let voices = [];
       try {
         const res = await chrome.runtime.sendMessage({
@@ -956,18 +958,26 @@
         tts.voiceEl.value = voices.includes(preferred) ? preferred : (voices[0] || "");
         tts.voice = tts.voiceEl.value;
         updateRatingDisplay();
+        updateSpeedUI();
       }
     }
 
     loadVoiceList();
 
-    speedInp.value = prefs.speed;
-    tts.speed = prefs.speed;
-    speedLabel.textContent = `${speedInp.value}x`;
+    function updateSpeedUI() {
+        const serverDef = SERVERS.get(tts.server);
+        const savedSpeed = prefs.speeds?.[tts.server]?.[tts.voice];
+        const speedValue = savedSpeed ?? serverDef.speed ?? 1.0;
+
+        tts.speed = speedValue;
+        speedInp.value = speedValue;
+        speedLabel.textContent = `${speedValue}x`;
+    }
+
     scrl.checked = prefs.autoScroll;
 
     function getCurrentRating() {
-        return prefs.voiceRatings?.[tts.server]?.[tts.voice] || 0;
+        return prefs.ratings?.[tts.server]?.[tts.voice] || 0;
     }
 
     // Re-generate HTML to apply 'rated' class for persistence and correct character/color.
@@ -991,14 +1001,14 @@
         }
 
         // --- Save the new rating ---
-        // Ensure voiceRatings structure exists
-        if (!prefs.voiceRatings) prefs.voiceRatings = {};
-        if (!prefs.voiceRatings[tts.server]) prefs.voiceRatings[tts.server] = {};
+        // Ensure ratings structure exists
+        if (!prefs.ratings) prefs.ratings = {};
+        if (!prefs.ratings[tts.server]) prefs.ratings[tts.server] = {};
 
         if (newRating === 0) {
-            delete prefs.voiceRatings[tts.server][tts.voice];
+            delete prefs.ratings[tts.server][tts.voice];
         } else {
-            prefs.voiceRatings[tts.server][tts.voice] = newRating;
+            prefs.ratings[tts.server][tts.voice] = newRating;
         }
 
         savePrefs(prefs).then(() => {
@@ -1015,6 +1025,7 @@
         tts.voice = voiceEl.value;
         prefs.voice[tts.server] = voiceEl.value;
         updateRatingDisplay();
+        updateSpeedUI();
         savePrefs(prefs);
         invalidateAudio(false);
       }
@@ -1025,7 +1036,11 @@
       if (tts.speed != newSpeed) {
         tts.speed = newSpeed;
         speedLabel.textContent = `${newSpeed}x`;
-        prefs.speed = newSpeed;
+
+        if (!prefs.speeds) prefs.speeds = {};
+        if (!prefs.speeds[tts.server]) prefs.speeds[tts.server] = {};
+        prefs.speeds[tts.server][tts.voice] = newSpeed;
+
         savePrefs(prefs);
         invalidateAudio(false);
       }

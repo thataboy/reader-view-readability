@@ -615,7 +615,7 @@
   // Pre-compile regexes and moves constants outside for performance
   const ABBREV = new Set([
     "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",
-    "V", "v","Fig", "Rev", "Sen", "Capt", "Sgt", "Col", "Adm",
+    "V", "v", "Fig", "Det", "Rev", "Sen", "Capt", "Sgt", "Col", "Adm",
     "U.S", "U.K", "A.M", "P.M", "a.m", "p.m", "e.g", "i.e", "Vs", "vs", "cf",
     "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug",
     "Sep", "Sept", "Oct", "Nov", "Dec",
@@ -777,6 +777,23 @@
     }, 500);
   }
 
+  const junkPhrases = [
+    'Skip to main content',
+    'Sign up for',
+    'Subscribe to',
+    'Continue reading',
+    'Most Popular',
+    'Follow us on',
+    'Abonnez-vous gratuitement'
+  ];
+
+  function cleanJunkElements(root) {
+    const elements = root.querySelectorAll(`:is(${BLOCKS},a):not(:has(${BLOCKS}))`);
+    elements.forEach(el => {
+      if (junkPhrases.some(phrase => el.textContent.includes(phrase))) el.remove();
+    });
+  }
+
   // --------------------------
   // Main toggle function
   // --------------------------
@@ -785,19 +802,30 @@
     if (existing) { existing.querySelector("#rv-close")?.click(); return; }
     if (!window.Readability) { console.error("Readability not found. Inject readability.js first."); return; }
 
-    document.querySelectorAll(`script, noscript, dialog, modal, form, [class*="tags"], [class*="signup"], [class*="hidden"]`)
-      .forEach(el => el.remove());
-    if (window.location.href.includes('slate.com')) {
-      document.querySelectorAll('p').forEach(p => {
-        if (p.textContent.includes('Sign up for')) p.remove();
-      })
+    const cloned = document.cloneNode(true);
+    // if there is <article> remove all blocks not a descendant or ancestor of <article>
+    if (cloned.querySelector('article')) {
+      cloned.querySelectorAll(`:is(${BLOCKS}):not(article *):not(:has(article))`).forEach(el => el.remove());
     }
+    const REMOVE_SELECTORS = [
+      'script',
+      'noscript',
+      'dialog',
+      'modal',
+      'form',
+      'header',
+      'footer',
+      '[class*="tags"]',
+      '[class*="signup"]',
+      '[class*="subscribe"]',
+      '[class*="subscription"]',
+      '[class*="hidden"]',
+      '[class*="share"]'
+    ].join(', ');
+    cloned.querySelectorAll(REMOVE_SELECTORS).forEach(el => el.remove());
+    cleanJunkElements(cloned);
 
-    const dom = new DOMParser().parseFromString(
-      "<!doctype html>" + document.documentElement.outerHTML,
-      "text/html"
-    );
-    const article = new window.Readability(dom).parse();
+    const article = new window.Readability(cloned).parse();
     if (!article || !article.content) { console.warn("Readability returned no content."); return; }
 
     container = buildOverlay(article.content, article.title, article.byline);

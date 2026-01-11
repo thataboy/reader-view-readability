@@ -129,9 +129,18 @@ const ABBREVIATION_MAP = {
   "Dr.": "Doctor",
   "V.": "versus",
   "v.": "versus",
+  "lbs.": "pounds",
+  "lbs": "pounds",
   "Prof.": "Professor",
   "Sr.": "Senior",
   "Jr.": "Junior",
+  "Det.": "Detective",
+  "Capt.": "Captain",
+  "Maj.": "Major",
+  "Gen.": "General",
+  "Col.": "Colonel",
+  "Lt.": "Lieutenant",
+  "Fig.": "Figure",
   "St.": "Saint"
 };
 

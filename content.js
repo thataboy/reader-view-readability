@@ -13,9 +13,9 @@
   });
 
   const SERVERS = new Map([
-    [Server.MY_KOKORO, {name: 'Kokoro', active: false, voices: ["ax_liam", "af_heart"], speed: 1.0}],
-    [Server.VOX_ANE, {name: 'Vox', active: true, voices: ["adam", "dorothy"], speed: 1.0}],
-    [Server.SUPERTONIC, {name: 'SuperT', active: true, voices: ["F1", "M1"], speed: 1.2}]
+    [Server.MY_KOKORO, {name: 'Kokoro', active: false, voices: [], speed: 1.0}],
+    [Server.VOX_ANE, {name: 'Vox', active: true, voices: [], speed: 1.0}],
+    [Server.SUPERTONIC, {name: 'SuperT', active: true, voices: [], speed: 1.2}]
   ]);
 
   // --------------------------
@@ -442,7 +442,6 @@
       <div id="rv-surface" role="dialog" aria-label="Reader View" tabindex="-1">
         <div id="rv-toolbar">
           <div id="rv-tts">
-            <button class="rv-btn" id="rv-close" title="Exit"><img></button>
             <div id="rv-servers"></div>
             <select id="rv-voice" title="Voice"></select>
             <div id="rv-rating-control" class="rv-rating-control" title="Rate the selected voice (0-3 stars)"></div>
@@ -466,6 +465,7 @@
             <button class="rv-btn" id="rv-font-dec" title="Decrease font"><img></button>
             <button class="rv-btn" id="rv-width-widen" title="Widen page"><img></button>
             <button class="rv-btn" id="rv-width-narrow" title="Narrow page"><img></button>
+            <button class="rv-btn" id="rv-close" title="Exit"><img></button>
           </div>
         </div>
         <div id="rv-content">
@@ -894,7 +894,7 @@
   // --------------------------
   // TTS Controls
   // --------------------------
-  function setupTTSControls(overlay, contentHost, prefs) {
+  async function setupTTSControls(overlay, contentHost, prefs) {
     const voiceEl = overlay.querySelector("#rv-voice");
     const speedInp = overlay.querySelector("#rv-speed");
     const speedLabel = overlay.querySelector("#rv-speed-label");
@@ -912,15 +912,30 @@
     speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
     speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
 
+    // load servers list
     const serversDiv = overlay.querySelector('#rv-servers');
+    let liveServer = null;
     for (const [id, server] of SERVERS.entries()) {
       if (!server.active) continue;
+      // load voices from server, thereby checking if server is alive
+      server.voices = [];
+      try {
+        const res = await chrome.runtime.sendMessage({
+          type: "tts.listVoices",
+          payload: { server: id }
+        });
+        if (res?.ok) {
+          server.voices = res.voices;
+          liveServer ||= id;
+        }
+      } catch {}
+      if (!server.voices.length) continue;
       const radioInput = document.createElement('input');
       radioInput.type = 'radio';
       radioInput.id = `server-${id}`;
       radioInput.name = 'tts_server';
       radioInput.value = id;
-      radioInput.checked = id == tts.server;
+      radioInput.checked = id == tts.server || id == liveServer;
       radioInput.className = 'rv-radio';
 
       const radioLabel = document.createElement('label');
@@ -950,18 +965,8 @@
 
     async function loadVoiceList() {
       const serverVoiceRatings = prefs.ratings[tts.server] || {};
-      let voices = [];
-      try {
-        const res = await chrome.runtime.sendMessage({
-          type: "tts.listVoices",
-          payload: { server: tts.server }
-        });
-        if (res?.ok) voices = res.voices;
-        else console.log(res?.error || "voices fetch failed");
-      } finally {
-        // Use fallback if API failed or returned empty
-        voices = voices.length ? voices : (SERVERS.get(tts.server).voices || []);
-
+      const voices = SERVERS.get(tts.server).voices;
+      if (voices.length) {
         // 1. Prepare for sorting
         let voiceData = voices.map(v => ({
             name: v,
@@ -990,7 +995,12 @@
       }
     }
 
-    loadVoiceList();
+    // fallback to first live server if current server is not responding
+    if (!SERVERS.get(tts.server)?.voices.length) tts.server = liveServer;
+
+    if (tts.server) loadVoiceList();
+    // hide play controls if no live server
+    overlay.querySelector("#rv-tts").style.display = tts.server ? 'inherit' : 'none';
 
     function updateSpeedUI() {
         const serverDef = SERVERS.get(tts.server);
@@ -1102,7 +1112,7 @@
 
     // Button handlers
     btnPlay.onclick = async () => {
-      if (tts.playing) return;
+      if (!tts.server || tts.playing) return;
       const startIndex = Math.max(0, tts.index);
       playAt(startIndex);
     };

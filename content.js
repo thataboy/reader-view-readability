@@ -167,6 +167,17 @@
     return task;
   }
 
+  function playAt(idx) {
+    stopPlayback();
+    if (idx < 0 || idx >= tts.segments.length) return;
+    tts.index = idx;
+    highlightCurrent(idx);
+    tts.playing = true;
+    tts.btnPlay.style.display = 'none';
+    tts.controls.style.display = 'inherit';
+    scheduleAt(idx);
+  }
+
   // Main playback scheduler
   async function scheduleAt(index) {
     const token = ++tts.playToken;
@@ -268,6 +279,13 @@
     }) } catch {}
     highlightReading();
     setStatus();
+  }
+
+  function invalidateAudio(continuePlay) {
+    const wasPlaying = tts.playing;
+    stopPlayback();
+    tts.decoded.clear();
+    if (wasPlaying && continuePlay) playAt(tts.index);
   }
 
   // Saves the current TTS reading progress (index) to storage.
@@ -396,7 +414,6 @@
     }
   }
 
-
   function offsetInElementFromPoint(el, clientX, clientY) {
     // Build a collapsed range at the click point
     let r = null;
@@ -460,7 +477,9 @@
             <span id="rv-tts-status"></span>
           </div>
           <div id="rv-format">
+            <div id="rv-scrl-div">
             <input id="rv-scrl" type="checkbox"/><label for="rv-scrl">AutoScroll </label>
+            </div>
             <button class="rv-btn" id="rv-font-inc" title="Increase font"><img></button>
             <button class="rv-btn" id="rv-font-dec" title="Decrease font"><img></button>
             <button class="rv-btn" id="rv-width-widen" title="Widen page"><img></button>
@@ -891,29 +910,21 @@
       return html;
   }
 
-  // --------------------------
-  // TTS Controls
-  // --------------------------
-  async function setupTTSControls(overlay, contentHost, prefs) {
-    const voiceEl = overlay.querySelector("#rv-voice");
+  function getCurrentRating(prefs) {
+      return prefs.ratings?.[tts.server]?.[tts.voice] || 0;
+  }
+
+  // Re-generate HTML to apply 'rated' class for persistence and correct character/color.
+  function updateRatingDisplay(prefs, ratingControl) {
+      const rating = getCurrentRating(prefs);
+      ratingControl.innerHTML = generateRatingControlHTML(rating);
+  }
+
+  async function loadServerUI(overlay, prefs) {
+    const serversDiv = overlay.querySelector('#rv-servers');
     const speedInp = overlay.querySelector("#rv-speed");
     const speedLabel = overlay.querySelector("#rv-speed-label");
-    const btnPlay = overlay.querySelector("#rv-tts-play");
-    const btnStop = overlay.querySelector("#rv-tts-stop");
-    const btnPrev = overlay.querySelector("#rv-tts-prev");
-    const btnNext = overlay.querySelector("#rv-tts-next");
-    const btnPrevP = overlay.querySelector("#rv-tts-prevp");
-    const btnNextP = overlay.querySelector("#rv-tts-nextp");
     const ratingControl = overlay.querySelector("#rv-rating-control");
-    const scrl = overlay.querySelector("#rv-scrl");
-
-    if (!voiceEl || !speedInp || !ratingControl) return;
-
-    speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
-    speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
-
-    // load servers list
-    const serversDiv = overlay.querySelector('#rv-servers');
     let liveServer = null;
     for (const [id, server] of SERVERS.entries()) {
       if (!server.active) continue;
@@ -956,80 +967,95 @@
               refreshSegments(contentHostEl);
               speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
               speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
-              updateRatingDisplay();
+              updateRatingDisplay(prefs, ratingControl);
               savePrefs(prefs);
-              loadVoiceList();
+              updateVoiceUI(overlay, prefs);
           }
       });
     }
 
-    async function loadVoiceList() {
-      const serverVoiceRatings = prefs.ratings[tts.server] || {};
-      const voices = SERVERS.get(tts.server).voices;
-      if (voices.length) {
-        // 1. Prepare for sorting
-        let voiceData = voices.map(v => ({
-            name: v,
-            rating: serverVoiceRatings[v] || 0
-        }));
-
-        // 2. Sort by rating (descending). The highest rated voices appear first.
-        // voiceData.sort((a, b) => b.rating - a.rating);
-
-        // 3. Populate dropdown
-        tts.voiceEl.innerHTML = "";
-        for (const data of voiceData) {
-          const opt = document.createElement("option");
-          opt.value = data.name;
-          const stars = '⭐'.repeat(Math.min(3, data.rating));
-          opt.textContent = stars ? `${data.name}  ${stars}` : data.name;
-          tts.voiceEl.appendChild(opt);
-        }
-
-        // 4. Set selected voice
-        const preferred = prefs.voice[tts.server];
-        tts.voiceEl.value = voices.includes(preferred) ? preferred : (voices[0] || "");
-        tts.voice = tts.voiceEl.value;
-        updateRatingDisplay();
-        updateSpeedUI();
-      }
-    }
-
     // fallback to first live server if current server is not responding
     if (!SERVERS.get(tts.server)?.voices.length) tts.server = liveServer;
+  }
 
-    if (tts.server) loadVoiceList();
+  function updateVoiceUI(overlay, prefs) {
+    const serverVoiceRatings = prefs.ratings[tts.server] || {};
+    const voices = SERVERS.get(tts.server).voices;
+    const ratingControl = overlay.querySelector("#rv-rating-control");
+    if (voices.length) {
+      // 1. Prepare for sorting
+      let voiceData = voices.map(v => ({
+          name: v,
+          rating: serverVoiceRatings[v] || 0
+      }));
+
+      // 2. Sort by rating (descending). The highest rated voices appear first.
+      // voiceData.sort((a, b) => b.rating - a.rating);
+
+      // 3. Populate dropdown
+      tts.voiceEl.innerHTML = "<option value='aaaaaaaa'>aaaaaa</option>";
+
+      for (const data of voiceData) {
+        const opt = document.createElement("option");
+        opt.value = data.name;
+        const stars = '⭐'.repeat(Math.min(3, data.rating));
+        opt.textContent = stars ? `${data.name}  ${stars}` : data.name;
+        tts.voiceEl.appendChild(opt);
+      }
+
+      // 4. Set selected voice
+      const preferred = prefs.voice[tts.server];
+      tts.voiceEl.value = voices.includes(preferred) ? preferred : (voices[0] || "");
+      tts.voice = tts.voiceEl.value;
+      updateRatingDisplay(prefs, ratingControl);
+      updateSpeedUI(overlay, prefs);
+    }
+  }
+
+  function updateSpeedUI(overlay, prefs) {
+      const serverDef = SERVERS.get(tts.server);
+      const savedSpeed = prefs.speeds?.[tts.server]?.[tts.voice];
+      const speedValue = savedSpeed ?? serverDef.speed ?? 1.0;
+      const speedInp = overlay.querySelector("#rv-speed");
+      const speedLabel = overlay.querySelector("#rv-speed-label");
+      tts.speed = speedValue;
+      speedInp.value = speedValue;
+      speedLabel.textContent = `${speedValue}x`;
+  }
+
+  // --------------------------
+  // TTS Controls
+  // --------------------------
+  async function setupTTSControls(overlay, contentHost, prefs) {
+    const voiceEl = overlay.querySelector("#rv-voice");
+    const speedInp = overlay.querySelector("#rv-speed");
+    const speedLabel = overlay.querySelector("#rv-speed-label");
+    const btnPlay = overlay.querySelector("#rv-tts-play");
+    const btnStop = overlay.querySelector("#rv-tts-stop");
+    const btnPrev = overlay.querySelector("#rv-tts-prev");
+    const btnNext = overlay.querySelector("#rv-tts-next");
+    const btnPrevP = overlay.querySelector("#rv-tts-prevp");
+    const btnNextP = overlay.querySelector("#rv-tts-nextp");
+    const ratingControl = overlay.querySelector("#rv-rating-control");
+    const scrl = overlay.querySelector("#rv-scrl");
+
+    speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
+    speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
+
+    await loadServerUI(overlay, prefs);
+    if (tts.server) updateVoiceUI(overlay, prefs);
     // hide play controls if no live server
     overlay.querySelector("#rv-tts").style.display = tts.server ? 'inherit' : 'none';
 
-    function updateSpeedUI() {
-        const serverDef = SERVERS.get(tts.server);
-        const savedSpeed = prefs.speeds?.[tts.server]?.[tts.voice];
-        const speedValue = savedSpeed ?? serverDef.speed ?? 1.0;
-
-        tts.speed = speedValue;
-        speedInp.value = speedValue;
-        speedLabel.textContent = `${speedValue}x`;
-    }
-
     scrl.checked = prefs.autoScroll;
-
-    function getCurrentRating() {
-        return prefs.ratings?.[tts.server]?.[tts.voice] || 0;
-    }
-
-    // Re-generate HTML to apply 'rated' class for persistence and correct character/color.
-    function updateRatingDisplay() {
-        const rating = getCurrentRating();
-        ratingControl.innerHTML = generateRatingControlHTML(rating);
-    }
+    overlay.querySelector("#rv-scrl-div").style.display = tts.server ? 'inherit' : 'none';
 
     // Handle click to set rating
     ratingControl.addEventListener('click', (e) => {
         const target = e.target.closest('.rv-rating-star');
         if (!target) return;
 
-        const currentRating = getCurrentRating();
+        const currentRating = getCurrentRating(prefs);
         const clickedRating = parseInt(target.dataset.ratingVal, 10);
         let newRating = clickedRating;
 
@@ -1051,9 +1077,9 @@
 
         savePrefs(prefs).then(() => {
             // Update the interactive display and the dropdown list
-            updateRatingDisplay();
-            // Need to call loadVoiceList to update the dropdown text and sort
-            loadVoiceList();
+            updateRatingDisplay(prefs, ratingControl);
+            // Need to call updateVoiceUI to update the dropdown text and sort
+            updateVoiceUI(overlay, prefs);
         });
     });
 
@@ -1062,8 +1088,8 @@
         // const wasPlaying = tts.playing;
         tts.voice = voiceEl.value;
         prefs.voice[tts.server] = voiceEl.value;
-        updateRatingDisplay();
-        updateSpeedUI();
+        updateRatingDisplay(prefs, ratingControl);
+        updateSpeedUI(overlay, prefs);
         savePrefs(prefs);
         invalidateAudio(false);
       }
@@ -1090,25 +1116,6 @@
       highlightCurrent(tts.index);
       highlightReading();
     });
-
-    function playAt(idx) {
-      stopPlayback();
-      if (idx < 0 || idx >= tts.segments.length) return;
-      tts.index = idx;
-      highlightCurrent(idx);
-      tts.playing = true;
-      tts.btnPlay.style.display = 'none';
-      tts.controls.style.display = 'inherit';
-      scheduleAt(idx);
-    }
-
-    function invalidateAudio(continuePlay) {
-      const wasPlaying = tts.playing;
-      stopPlayback();
-      tts.decoded.clear();
-      tts.playToken++;           // invalidate any pending onended
-      if (wasPlaying && continuePlay) playAt(tts.index);
-    }
 
     // Button handlers
     btnPlay.onclick = async () => {

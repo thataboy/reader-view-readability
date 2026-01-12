@@ -458,6 +458,7 @@
     container.innerHTML = `
       <div id="rv-surface" role="dialog" aria-label="Reader View" tabindex="-1">
         <div id="rv-toolbar">
+          <button class="rv-btn" id="rv-close" title="Exit"><img></button>
           <div id="rv-tts">
             <div id="rv-servers"></div>
             <select id="rv-voice" title="Voice"></select>
@@ -484,7 +485,6 @@
             <button class="rv-btn" id="rv-font-dec" title="Decrease font"><img></button>
             <button class="rv-btn" id="rv-width-widen" title="Widen page"><img></button>
             <button class="rv-btn" id="rv-width-narrow" title="Narrow page"><img></button>
-            <button class="rv-btn" id="rv-close" title="Exit"><img></button>
           </div>
         </div>
         <div id="rv-content">
@@ -887,7 +887,7 @@
     }
 
     // Set icons
-    setIcon("rv-close", "logout.png");
+    setIcon("rv-close", "exit.png");
     setIcon("rv-font-inc", "text_increase.png");
     setIcon("rv-font-dec", "text_decrease.png");
     setIcon("rv-width-widen", "widen.png");

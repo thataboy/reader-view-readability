@@ -73,7 +73,7 @@
   };
 
   const LONG_PAGE_THRESHOLD = 150;  // Minimum segments to consider a page "long"
-  const MAX_SAVED_PAGES = 50;       // Max number of saved reading positions
+  const MAX_SAVED_PAGES = 100       // Max number of saved reading positions
   const currentPageUrl = window.location.href.split(/[?#]/)[0]; // Use URL without query/hash
   const _lang = (document.documentElement.lang || 'en').substring(0, 2).toLowerCase();
 
@@ -304,8 +304,9 @@
 
     if (!prefs.readingProgress) prefs.readingProgress = {};
 
-    // Update only THIS page's entry
-    prefs.readingProgress[currentPageUrl] = {
+    if (tts.index == 0 || tts.index + 1 >= tts.segments.length )
+      delete prefs.readingProgress[currentPageUrl];
+    else prefs.readingProgress[currentPageUrl] = {
       index: tts.index,
       segments: tts.segments.length,
       timestamp: Date.now()
@@ -313,16 +314,14 @@
 
     // Prune the oldest entries
     const urls = Object.keys(prefs.readingProgress);
-    if (urls.length > MAX_SAVED_PAGES) {
-      const sortedUrls = urls.sort((a, b) =>
+    const n = urls.length - MAX_SAVED_PAGES;
+    if (n > 0) {
+      urls.sort((a, b) =>
         prefs.readingProgress[a].timestamp - prefs.readingProgress[b].timestamp
       );
-      for (let i = 0; i < urls.length - MAX_SAVED_PAGES; i++) {
-        delete prefs.readingProgress[sortedUrls[i]];
-      }
+      for (let i = 0; i < n; i++) delete prefs.readingProgress[urls[i]];
     }
 
-    // Save back to storage
     await savePrefs();
   }
 
@@ -457,7 +456,7 @@
   // --------------------------
   // UI + overlay
   // --------------------------
-  function buildOverlay(articleHTML, title, byline) {
+  function buildOverlay(article) {
     overlay = document.createElement("div");
     overlay.id = "reader-view-overlay";
     overlay.innerHTML = `
@@ -493,9 +492,9 @@
           </div>
         </div>
         <div id="rv-content">
-          ${title ? `<h1>${title}</h1>` : ""}
-          ${byline ? `<p><em>${byline}</em></p>` : ""}
-          <div id="rv-article-body">${articleHTML}</div>
+          ${article.title ? `<h1>${article.title}</h1>` : ""}
+          ${article.byline ? `<p><em>${article.byline}</em></p>` : ""}
+          <div id="rv-article-body">${article.content}</div>
         </div>
       </div>
     `;
@@ -686,16 +685,33 @@
     return -1;
   }
 
+  const TTS_SKIP_BLOCKS = [
+    'header',
+    'footer',
+    'caption',
+    'figcaption',
+    '[id*="caption"]',
+    '[class*="header"]',
+    '[aria-hidden]',
+    'header *',
+    'footer *',
+    'caption *',
+    'figcaption *',
+    '[id*="caption"] *',
+    '[class*="header"] *',
+    '[aria-hidden] *',
+  ].join(', ');
+
   function segmentSentences() {
     const isVox = tts.server == Server.VOX_ANE;
     const isSuper = tts.server == Server.SUPERTONIC;
-    const MIN_CHARS = isVox ? 35 : (isSuper ? 100 : 150);
+    const MIN_CHARS = isVox ? 35 : (isSuper ? 75 : 35);
     const MAX_CHARS = isVox ? 200 : (isSuper ? 600 : 300);
 
     const scope = contentHost.querySelector("#rv-article-body");
     if (!scope) return { texts: [], meta: [] };
 
-    const allBlocks = Array.from(scope.querySelectorAll(`:is(${BLOCKS}):not(header *):not(footer *):not(caption *):not([aria-hidden] *)`));
+    const allBlocks = Array.from(scope.querySelectorAll(`:is(${BLOCKS}):not(${TTS_SKIP_BLOCKS})`));
 
     // Filter for containers that have direct text or are leaf nodes
     const validContainers = allBlocks.filter(el => {
@@ -730,17 +746,6 @@
 
     // Use a Set for O(1) lookups inside the TreeWalker
     const containerSet = new Set(validContainers);
-    const SKIP_ELEMENTS = [
-      'sup',
-      'label',
-      'caption',
-      'figcaption',
-      'sup *',
-      'label *',
-      'caption *',
-      'figcaption *',
-      '[id*="caption"]',
-    ].join(', ');
     const SKIP_TEXTS = [
       'Reading time',
       'Temps de lecture',
@@ -750,12 +755,12 @@
       // Use matches() to skip sup/label and check containerSet to prevent double-reading nested blocks
       const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
         acceptNode: (n) => {
+          const p = n.parentElement;
+          if (p.matches('sup, sup *, label, label *')) return NodeFilter.FILTER_REJECT;
           if (SKIP_TEXTS.some(txt => n.textContent.includes(txt))) return NodeFilter.FILTER_REJECT;
 
-          const p = n.parentElement;
-          if (p.matches(SKIP_ELEMENTS)) return NodeFilter.FILTER_REJECT;
-
           let walk = p;
+
           while (walk && walk !== el) {
             if (containerSet.has(walk)) return NodeFilter.FILTER_REJECT;
             walk = walk.parentElement;
@@ -840,7 +845,7 @@
     setTimeout(() => {
       highlightCurrent(tts.index);
       setStatus();
-    }, 500);
+    }, tts.segments.length < 1000 ? 300 : 1000);
   }
 
   const junkPhrases = [
@@ -870,6 +875,7 @@
 
     const cloned = document.cloneNode(true);
     const REMOVE_SELECTORS = [
+      'style',
       'script',
       'noscript',
       'dialog',
@@ -879,8 +885,9 @@
       'footer',
       'aside',
       'nav',
+      '[rel*="category"]',
+      '[class*="footer"]',
       '[class*="tags"]',
-      '[class*="title"]',
       '[class*="signup"]',
       '[class*="social"]',
       '[class*="subscribe"]',
@@ -888,9 +895,18 @@
       '[class*="hidden"]',
       '[class*="restricted"]',
       '[class*="to-read"]',
-      '[class*="share"]'
-    ].join(', ');
-    cloned.querySelectorAll(REMOVE_SELECTORS).forEach(el => el.remove());
+      '[class*="share"]',
+    ];
+    PER_SITE_REMOVE = [
+      ['lesswrong.com', '[class*="FixedPositionToC"]'],
+    ];
+    for (const [url, elem] of PER_SITE_REMOVE) {
+      if (currentPageUrl.includes(url)) {
+        REMOVE_SELECTORS.push(elem);
+        break;
+      }
+    }
+    cloned.querySelectorAll(REMOVE_SELECTORS.join(',')).forEach(el => el.remove());
     cleanJunkElements(cloned);
 
     // if there is <article> remove all blocks not a descendant or ancestor of <article>
@@ -898,10 +914,15 @@
       cloned.querySelectorAll(`:is(${BLOCKS}):not(article *):not(:has(article))`).forEach(el => el.remove());
     }
 
-    const article = new window.Readability(cloned).parse();
+    const options = {
+      classesToPreserve: [
+        /header/,
+      ],
+    };
+    const article = new window.Readability(cloned, options).parse();
     if (!article || !article.content) { console.log("Readability returned no content."); return; }
 
-    buildOverlay(article.content, article.title, article.byline);
+    buildOverlay(article);
 
     prefs = await loadPrefs();
     tts.server = prefs.server;
@@ -919,10 +940,8 @@
         // Restore the index (other tts properties are already set)
         tts.index = Math.min(savedProgress.index, currentSegmentCount - 1); // Clamp index
         // Jumps the view to the last read position
-        setTimeout(() => {
-          highlightCurrent(tts.index);
-          setStatus();
-        }, 500);
+        highlightCurrent(tts.index);
+        setStatus();
         progressRestored = true;
       } else {
         // If the article changed, remove the stale progress
@@ -1042,7 +1061,7 @@
       // voiceData.sort((a, b) => b.rating - a.rating);
 
       // 3. Populate dropdown
-      tts.voiceEl.innerHTML = "<option value='aaaaaaaa'>aaaaaa</option>";
+      tts.voiceEl.innerHTML = "";
 
       for (const data of voiceData) {
         const opt = document.createElement("option");
@@ -1135,10 +1154,11 @@
     const btnNextP = overlay.querySelector("#rv-tts-nextp");
     const btnPrevP = overlay.querySelector("#rv-tts-prevp");
 
+    await loadServerUI();
+
     speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
     speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
 
-    await loadServerUI();
     if (tts.server) updateVoiceUI();
     // hide play controls if no live server
     overlay.querySelector("#rv-tts").style.display = tts.server ? 'inherit' : 'none';
@@ -1220,7 +1240,7 @@
       playAt(startIndex);
     };
 
-    tts.btnStop.onclick = () => { stopPlayback(); };
+    tts.btnStop.onclick = () => { stopPlayback(); saveReadingProgress() };
 
     btnPrev.onclick = () => { playAt(tts.index - 1); };
 
@@ -1259,18 +1279,28 @@
       playAt(nextStart);
     };
 
-    // Double click on sentence to start playing there
-    contentHost.addEventListener("dblclick", async (e) => {
-      if (tts.playing) return; e.preventDefault();
+    function playAtClick(e) {
+      e.preventDefault();
       const idx = findIdxAtClick(e);
       if (idx !== null) playAt(idx);
+    }
+
+    // dbl click, middle click, or meta + click on sentence while not playing to start playing there
+    contentHost.addEventListener("dblclick", (e) => {
+      if (!tts.playing) playAtClick(e);
     }, true);
 
-    // Single click on sentence while playing to jump there
+    contentHost.addEventListener("mouseup", (e) => {
+      if (!tts.playing && e.button === 1) playAtClick(e);
+    }, true);
+
     contentHost.addEventListener("click", (e) => {
-      if (!tts.playing) return; e.preventDefault();
-      const idx = findIdxAtClick(e);
-      if (idx !== null) playAt(idx);
+      if (e.metaKey) {
+        if (!tts.playing) playAtClick(e);
+        return;
+      }
+      // Single click on sentence while playing to jump there
+      if (tts.playing) playAtClick(e);
     }, true);
 
   }

@@ -411,15 +411,16 @@ Readability.prototype = {
    * Removes the class="" attribute from every element in the given
    * subtree, except those that match CLASSES_TO_PRESERVE and
    * the classesToPreserve array from the options object.
+   * classToPreserve may contain mix of strings and regexes
    *
    * @param Element
    * @return void
    */
   _cleanClasses(node) {
     var classesToPreserve = this._classesToPreserve;
-    var className = (node.getAttribute("class") || "")
+    var className = (node.getAttribute("class")?.toLowerCase() || "")
       .split(/\s+/)
-      .filter(cls => classesToPreserve.includes(cls))
+      .filter(cls => classesToPreserve.some(r => (typeof r === 'string') ? cls === r : r.test(cls)))
       .join(" ");
 
     if (className) {

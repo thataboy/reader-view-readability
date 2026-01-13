@@ -133,6 +133,7 @@ const ABBREVIATION_MAP = {
   "lbs.": "pounds",
   "lbs": "pounds",
   "Prof.": "Professor",
+  "Bros.": "Brothers",
   "Sr.": "Senior",
   "Jr.": "Junior",
   "Det.": "Detective",

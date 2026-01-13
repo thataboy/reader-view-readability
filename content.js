@@ -18,6 +18,10 @@
     [Server.SUPERTONIC, {name: 'SuperT', active: true, voices: [], speed: 1.2}]
   ]);
 
+  let prefs;        // saved preferences
+  let overlay;      // reader view overlay
+  let contentHost;  // div where main content resides
+
   // --------------------------
   // Storage helpers
   // --------------------------
@@ -32,7 +36,7 @@
       catch { return { ...defaults }; }
     }
   }
-  async function savePrefs(prefs) {
+  async function savePrefs() {
     try { await chrome.storage.local.set({ [STORAGE_KEY]: prefs }); }
     catch { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs)); } catch {} }
   }
@@ -61,6 +65,7 @@
     btnPlay: null,
     btnStop: null,
     btnNext: null,
+    rating: null,        // star rating control
     controls: null,      // button group not including Play
     scrl: null,          // auto scroll checkbox
     meta: [],            // [{el,start,end}] parallel to tts.texts[index]
@@ -295,7 +300,7 @@
     }
 
     // Fetch latest prefs from storage right now
-    const prefs = await loadPrefs();
+    prefs = await loadPrefs();
 
     if (!prefs.readingProgress) prefs.readingProgress = {};
 
@@ -318,7 +323,7 @@
     }
 
     // Save back to storage
-    await savePrefs(prefs);
+    await savePrefs();
   }
 
   // --------------------------
@@ -453,9 +458,9 @@
   // UI + overlay
   // --------------------------
   function buildOverlay(articleHTML, title, byline) {
-    const container = document.createElement("div");
-    container.id = "reader-view-overlay";
-    container.innerHTML = `
+    overlay = document.createElement("div");
+    overlay.id = "reader-view-overlay";
+    overlay.innerHTML = `
       <div id="rv-surface" role="dialog" aria-label="Reader View" tabindex="-1">
         <div id="rv-toolbar">
           <button class="rv-btn" id="rv-close" title="Exit"><img></button>
@@ -499,14 +504,13 @@
     link.id = "rv-style-link";
     link.href = chrome.runtime.getURL("overlay.css");
     document.head.appendChild(link);
-    return container;
   }
 
-  function attachOverlay(container, prefs) {
+  function attachOverlay() {
     document.getElementById("reader-view-overlay")?.remove();
 
-    const surface = container.querySelector("#rv-surface");
-    const contentHost = container.querySelector("#rv-content");
+    contentHost = overlay.querySelector("#rv-content");
+    const surface = overlay.querySelector("#rv-surface");
 
     // Apply saved prefs
     surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
@@ -514,29 +518,30 @@
     contentHost.style.setProperty("--rv-maxw", `${prefs.maxWidth}px`);
     if (prefs.server && SERVERS.has(prefs.server)) tts.server = prefs.server;
 
-    // save status element
-    tts.voiceEl = container.querySelector("#rv-voice");
-    tts.statusEl = container.querySelector("#rv-tts-status");
-    tts.btnPlay = container.querySelector("#rv-tts-play");
-    tts.btnStop = container.querySelector("#rv-tts-stop");
-    tts.btnNext = container.querySelector("#rv-tts-next");
-    tts.controls = container.querySelector("#rv-tts-controls");
-    tts.scrl = container.querySelector("#rv-scrl");
+    // save UI elements
+    tts.voiceEl = overlay.querySelector("#rv-voice");
+    tts.statusEl = overlay.querySelector("#rv-tts-status");
+    tts.btnPlay = overlay.querySelector("#rv-tts-play");
+    tts.btnStop = overlay.querySelector("#rv-tts-stop");
+    tts.btnNext = overlay.querySelector("#rv-tts-next");
+    tts.controls = overlay.querySelector("#rv-tts-controls");
+    tts.rating = overlay.querySelector("#rv-rating-control");
+    tts.scrl = overlay.querySelector("#rv-scrl");
     setStatus();
 
-    const outside = Array.from(document.body.children).filter(n => n !== container);
+    const outside = Array.from(document.body.children).filter(n => n !== overlay);
     outside.forEach(n => { try { n.setAttribute("inert", ""); } catch(_){} });
 
     document.documentElement.classList.add("rv-active");
 
     async function cleanup() {
-      await saveReadingProgress(prefs);
+      await saveReadingProgress();
       stopPlayback();
       document.removeEventListener("keyup", onKey, true);
       document.removeEventListener("copy", onCopy, true);
       outside.forEach(n => { try { n.removeAttribute("inert"); } catch(_){} });
       document.documentElement.classList.remove("rv-active");
-      container.remove();
+      overlay.remove();
       if (!tts) return;
       if (tts.audioCtx) {
         try { tts.audioCtx.close(); } catch {}
@@ -553,7 +558,7 @@
     }
 
     function selectTarget() {
-      const target = contentHost.querySelector("#rv-article-body") || contentHost;
+      const target = contentHost.querySelector("#rv-article-body");
       const sel = window.getSelection();
       const range = document.createRange();
       range.selectNodeContents(target);
@@ -575,12 +580,12 @@
         e.preventDefault();
         prefs.fontSize = Math.min(32, prefs.fontSize + 1);
         surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
-        savePrefs(prefs);
+        savePrefs();
       } else if (e.keyCode == 189) {
         e.preventDefault();
         prefs.fontSize = Math.max(12, prefs.fontSize - 1);
         surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
-        savePrefs(prefs);
+        savePrefs();
       }
     }
 
@@ -598,42 +603,42 @@
     }
 
     // Toolbar handlers
-    container.querySelector("#rv-close").addEventListener("click", cleanup);
+    overlay.querySelector("#rv-close").addEventListener("click", cleanup);
 
-    container.querySelector("#rv-font-inc").addEventListener("click", () => {
+    overlay.querySelector("#rv-font-inc").addEventListener("click", () => {
       prefs.fontSize = Math.min(32, prefs.fontSize + 1);
       surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
-      savePrefs(prefs);
+      savePrefs();
     });
-    container.querySelector("#rv-font-dec").addEventListener("click", () => {
+    overlay.querySelector("#rv-font-dec").addEventListener("click", () => {
       prefs.fontSize = Math.max(12, prefs.fontSize - 1);
       surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
-      savePrefs(prefs);
+      savePrefs();
     });
-    container.querySelector("#rv-width-widen").addEventListener("click", () => {
+    overlay.querySelector("#rv-width-widen").addEventListener("click", () => {
       prefs.maxWidth = Math.min(1400, prefs.maxWidth + 40);
       contentHost.style.setProperty("--rv-maxw", `${prefs.maxWidth}px`);
-      savePrefs(prefs);
+      savePrefs();
     });
-    container.querySelector("#rv-width-narrow").addEventListener("click", () => {
+    overlay.querySelector("#rv-width-narrow").addEventListener("click", () => {
       prefs.maxWidth = Math.max(520, prefs.maxWidth - 40);
       contentHost.style.setProperty("--rv-maxw", `${prefs.maxWidth}px`);
-      savePrefs(prefs);
+      savePrefs();
     });
 
     document.addEventListener("keyup", onKey, true);
     document.addEventListener("copy", onCopy, true);
-    document.documentElement.appendChild(container);
+    document.documentElement.appendChild(overlay);
     surface.focus();
 
-    setupTTSControls(container, contentHost, prefs);
+    setupTTSControls();
   }
 
   const BLOCKS = "p, div, blockquote, li, h1, h2, h3, h4, h5, h6, pre, ol, ul";
 
   // Pre-compile regexes and moves constants outside for performance
   const ABBREV = new Set([
-    "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",
+    "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St", "Bros",
     "V", "v", "Fig", "Det", "Rev", "Sen", "Capt", "Sgt", "Col", "Adm",
     "U.S", "U.K", "A.M", "P.M", "a.m", "p.m", "e.g", "i.e", "Vs", "vs", "cf",
     "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug",
@@ -681,13 +686,13 @@
     return -1;
   }
 
-  function segmentSentences(rootEl) {
+  function segmentSentences() {
     const isVox = tts.server == Server.VOX_ANE;
     const isSuper = tts.server == Server.SUPERTONIC;
     const MIN_CHARS = isVox ? 35 : (isSuper ? 100 : 150);
     const MAX_CHARS = isVox ? 200 : (isSuper ? 600 : 300);
 
-    const scope = rootEl.querySelector('section[name="articleBody"]') || rootEl.querySelector('#rv-article-body');
+    const scope = contentHost.querySelector("#rv-article-body");
     if (!scope) return { texts: [], meta: [] };
 
     const allBlocks = Array.from(scope.querySelectorAll(`:is(${BLOCKS}):not(header *):not(footer *):not(caption *):not([aria-hidden] *)`));
@@ -736,11 +741,17 @@
       'figcaption *',
       '[id*="caption"]',
     ].join(', ');
+    const SKIP_TEXTS = [
+      'Reading time',
+      'Temps de lecture',
+    ];
 
     for (const el of validContainers) {
       // Use matches() to skip sup/label and check containerSet to prevent double-reading nested blocks
       const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
         acceptNode: (n) => {
+          if (SKIP_TEXTS.some(txt => n.textContent.includes(txt))) return NodeFilter.FILTER_REJECT;
+
           const p = n.parentElement;
           if (p.matches(SKIP_ELEMENTS)) return NodeFilter.FILTER_REJECT;
 
@@ -799,7 +810,7 @@
     return { texts, meta };
   }
 
-  function refreshSegments(contentHostEl) {
+  function refreshSegments() {
     // Remember the current position to restore it after re-segmenting
     let savedEl = null;
     let savedOffset = 0;
@@ -812,7 +823,7 @@
     clearHighlight();
 
     // Perform segmentation with current server's MIN/MAX constraints
-    const { texts, meta } = segmentSentences(contentHostEl);
+    const { texts, meta } = segmentSentences();
     tts.texts = texts;
     tts.meta = meta;
     tts.segments = new Array(texts.length).fill(0);
@@ -890,19 +901,16 @@
     const article = new window.Readability(cloned).parse();
     if (!article || !article.content) { console.log("Readability returned no content."); return; }
 
-    container = buildOverlay(article.content, article.title, article.byline);
+    buildOverlay(article.content, article.title, article.byline);
 
-    const prefs = await loadPrefs();
+    prefs = await loadPrefs();
     tts.server = prefs.server;
-    attachOverlay(container, prefs);
-
-    // --- Segmentation and Progress restoration logic ---
-    const contentHostEl = container.querySelector("#rv-content");
+    attachOverlay();
 
     let progressRestored = false;
     const savedProgress = prefs.readingProgress[currentPageUrl];
 
-    refreshSegments(contentHostEl);
+    refreshSegments();
     const currentSegmentCount = tts.segments.length;
     // Check if the saved progress is for a long page and the index is valid
     if (savedProgress?.segments >= LONG_PAGE_THRESHOLD && savedProgress.index > 0) {
@@ -919,7 +927,7 @@
       } else {
         // If the article changed, remove the stale progress
         delete prefs.readingProgress[currentPageUrl];
-        savePrefs(prefs);
+        savePrefs();
       }
     }
 
@@ -953,21 +961,21 @@
       return html;
   }
 
-  function getCurrentRating(prefs) {
+  function getCurrentRating() {
       return prefs.ratings?.[tts.server]?.[tts.voice] || 0;
   }
 
   // Re-generate HTML to apply 'rated' class for persistence and correct character/color.
-  function updateRatingDisplay(prefs, ratingControl) {
-      const rating = getCurrentRating(prefs);
-      ratingControl.innerHTML = generateRatingControlHTML(rating);
+  function updateRatingDisplay() {
+      const rating = getCurrentRating();
+      tts.rating.innerHTML = generateRatingControlHTML(rating);
   }
 
-  async function loadServerUI(overlay, prefs) {
+  async function loadServerUI() {
     const serversDiv = overlay.querySelector('#rv-servers');
     const speedInp = overlay.querySelector("#rv-speed");
     const speedLabel = overlay.querySelector("#rv-speed-label");
-    const ratingControl = overlay.querySelector("#rv-rating-control");
+    const rating = overlay.querySelector("#rv-rating-control");
     let liveServer = null;
     for (const [id, server] of SERVERS.entries()) {
       if (!server.active) continue;
@@ -1006,13 +1014,12 @@
               invalidateAudio(false);
               tts.server = newServer;
               prefs.server = newServer;
-              const contentHostEl = overlay.querySelector("#rv-content");
-              refreshSegments(contentHostEl);
+              refreshSegments();
               speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
               speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
-              updateRatingDisplay(prefs, ratingControl);
-              savePrefs(prefs);
-              updateVoiceUI(overlay, prefs);
+              updateRatingDisplay();
+              savePrefs();
+              updateVoiceUI();
           }
       });
     }
@@ -1021,10 +1028,9 @@
     if (!SERVERS.get(tts.server)?.voices.length) tts.server = liveServer;
   }
 
-  function updateVoiceUI(overlay, prefs) {
+  function updateVoiceUI() {
     const serverVoiceRatings = prefs.ratings[tts.server] || {};
     const voices = SERVERS.get(tts.server).voices;
-    const ratingControl = overlay.querySelector("#rv-rating-control");
     if (voices.length) {
       // 1. Prepare for sorting
       let voiceData = voices.map(v => ({
@@ -1050,12 +1056,12 @@
       const preferred = prefs.voice[tts.server];
       tts.voiceEl.value = voices.includes(preferred) ? preferred : (voices[0] || "");
       tts.voice = tts.voiceEl.value;
-      updateRatingDisplay(prefs, ratingControl);
-      updateSpeedUI(overlay, prefs);
+      updateRatingDisplay();
+      updateSpeedUI();
     }
   }
 
-  function updateSpeedUI(overlay, prefs) {
+  function updateSpeedUI() {
       const serverDef = SERVERS.get(tts.server);
       const savedSpeed = prefs.speeds?.[tts.server]?.[tts.voice];
       const speedValue = savedSpeed ?? serverDef.speed ?? 1.0;
@@ -1066,39 +1072,86 @@
       speedLabel.textContent = `${speedValue}x`;
   }
 
+  function paragraphStartIndexAt(idx) {
+    if (!tts.meta?.length || idx < 0 || idx >= tts.meta.length) return -1;
+    const el = tts.meta[idx].el;
+    while (idx > 0 && tts.meta[idx - 1].el === el) idx--;
+    return idx;
+  }
+
+  function paragraphEndIndexAt(idx) {
+    if (!tts.meta?.length || idx < 0 || idx >= tts.meta.length) return -1;
+    const el = tts.meta[idx].el;
+    while (idx + 1 < tts.meta.length && tts.meta[idx + 1].el === el) idx++;
+    return idx;
+  }
+  function findIdxAtClick(e) {
+    const scope = contentHost.querySelector("#rv-article-body");
+    if (!scope) return null;
+
+    // Start from the block element that was actually clicked
+    let el = e.target.closest(BLOCKS);
+    if (!el) return null;
+
+    // Walk up until we find the element we actually registered in tts.meta.
+    // We stop at scope to stay within the article bounds.
+    while (el && scope.contains(el)) {
+      if (tts.meta.some(m => m.el === el)) break;
+      const parent = el.parentElement?.closest(BLOCKS);
+      if (!parent) break;
+      el = parent;
+    }
+
+    if (!el) return null;
+
+    // Compute character offset within the identified overlay
+    const off = offsetInElementFromPoint(el, e.clientX, e.clientY);
+    if (off == null) return null;
+
+    // Find the sentence in this element that spans the offset
+    let idx = -1;
+    for (let i = 0; i < tts.meta.length; i++) {
+      const m = tts.meta[i];
+      if (m.el === el && off >= m.start && off < m.end) {
+        idx = i;
+        break;
+      }
+    }
+
+    // Fallback: first sentence in this element
+    if (idx < 0) {
+      idx = tts.meta.findIndex(m => m.el === el);
+    }
+    return idx;
+  }
+
   // --------------------------
   // TTS Controls
   // --------------------------
-  async function setupTTSControls(overlay, contentHost, prefs) {
-    const voiceEl = overlay.querySelector("#rv-voice");
+  async function setupTTSControls() {
     const speedInp = overlay.querySelector("#rv-speed");
     const speedLabel = overlay.querySelector("#rv-speed-label");
-    const btnPlay = overlay.querySelector("#rv-tts-play");
-    const btnStop = overlay.querySelector("#rv-tts-stop");
     const btnPrev = overlay.querySelector("#rv-tts-prev");
-    const btnNext = overlay.querySelector("#rv-tts-next");
-    const btnPrevP = overlay.querySelector("#rv-tts-prevp");
     const btnNextP = overlay.querySelector("#rv-tts-nextp");
-    const ratingControl = overlay.querySelector("#rv-rating-control");
-    const scrl = overlay.querySelector("#rv-scrl");
+    const btnPrevP = overlay.querySelector("#rv-tts-prevp");
 
     speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
     speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
 
-    await loadServerUI(overlay, prefs);
-    if (tts.server) updateVoiceUI(overlay, prefs);
+    await loadServerUI();
+    if (tts.server) updateVoiceUI();
     // hide play controls if no live server
     overlay.querySelector("#rv-tts").style.display = tts.server ? 'inherit' : 'none';
 
-    scrl.checked = prefs.autoScroll;
+    tts.scrl.checked = prefs.autoScroll;
     overlay.querySelector("#rv-scrl-div").style.display = tts.server ? 'inherit' : 'none';
 
     // Handle click to set rating
-    ratingControl.addEventListener('click', (e) => {
+    tts.rating.addEventListener('click', (e) => {
         const target = e.target.closest('.rv-rating-star');
         if (!target) return;
 
-        const currentRating = getCurrentRating(prefs);
+        const currentRating = getCurrentRating();
         const clickedRating = parseInt(target.dataset.ratingVal, 10);
         let newRating = clickedRating;
 
@@ -1118,22 +1171,22 @@
             prefs.ratings[tts.server][tts.voice] = newRating;
         }
 
-        savePrefs(prefs).then(() => {
+        savePrefs().then(() => {
             // Update the interactive display and the dropdown list
-            updateRatingDisplay(prefs, ratingControl);
+            updateRatingDisplay();
             // Need to call updateVoiceUI to update the dropdown text and sort
-            updateVoiceUI(overlay, prefs);
+            updateVoiceUI();
         });
     });
 
-    voiceEl.addEventListener("change", () => {
-      if (tts.voice !== voiceEl.value) {
+    tts.voiceEl.addEventListener("change", () => {
+      if (tts.voice !== tts.voiceEl.value) {
         // const wasPlaying = tts.playing;
-        tts.voice = voiceEl.value;
-        prefs.voice[tts.server] = voiceEl.value;
-        updateRatingDisplay(prefs, ratingControl);
-        updateSpeedUI(overlay, prefs);
-        savePrefs(prefs);
+        tts.voice = tts.voiceEl.value;
+        prefs.voice[tts.server] = tts.voiceEl.value;
+        updateRatingDisplay();
+        updateSpeedUI();
+        savePrefs();
         invalidateAudio(false);
       }
     });
@@ -1148,44 +1201,30 @@
         if (!prefs.speeds[tts.server]) prefs.speeds[tts.server] = {};
         prefs.speeds[tts.server][tts.voice] = newSpeed;
 
-        savePrefs(prefs);
+        savePrefs();
         invalidateAudio(false);
       }
     });
 
-    scrl.addEventListener("change", () => {
-      prefs.autoScroll = scrl.checked;
-      savePrefs(prefs);
+    tts.scrl.addEventListener("change", () => {
+      prefs.autoScroll = tts.scrl.checked;
+      savePrefs();
       highlightCurrent(tts.index);
       highlightReading();
     });
 
     // Button handlers
-    btnPlay.onclick = async () => {
+    tts.btnPlay.onclick = async () => {
       if (!tts.server || tts.playing) return;
       const startIndex = Math.max(0, tts.index);
       playAt(startIndex);
     };
 
-    btnStop.onclick = () => { stopPlayback(); };
-
-    function paragraphStartIndexAt(idx) {
-      if (!tts.meta?.length || idx < 0 || idx >= tts.meta.length) return -1;
-      const el = tts.meta[idx].el;
-      while (idx > 0 && tts.meta[idx - 1].el === el) idx--;
-      return idx;
-    }
-
-    function paragraphEndIndexAt(idx) {
-      if (!tts.meta?.length || idx < 0 || idx >= tts.meta.length) return -1;
-      const el = tts.meta[idx].el;
-      while (idx + 1 < tts.meta.length && tts.meta[idx + 1].el === el) idx++;
-      return idx;
-    }
+    tts.btnStop.onclick = () => { stopPlayback(); };
 
     btnPrev.onclick = () => { playAt(tts.index - 1); };
 
-    btnNext.onclick = () => { playAt(tts.index + 1); };
+    tts.btnNext.onclick = () => { playAt(tts.index + 1); };
 
     btnPrevP.onclick = () => {
       if (!tts.prepared || !tts.meta?.length) return;
@@ -1219,46 +1258,6 @@
       }
       playAt(nextStart);
     };
-
-    function findIdxAtClick(e) {
-      const scope = contentHost.querySelector('section[name="articleBody"]') || contentHost.querySelector('#rv-article-body');
-      if (!scope) return null;
-
-      // Start from the block element that was actually clicked
-      let el = e.target.closest(BLOCKS);
-      if (!el) return null;
-
-      // Walk up until we find the element we actually registered in tts.meta.
-      // We stop at scope to stay within the article bounds.
-      while (el && scope.contains(el)) {
-        if (tts.meta.some(m => m.el === el)) break;
-        const parent = el.parentElement?.closest(BLOCKS);
-        if (!parent) break;
-        el = parent;
-      }
-
-      if (!el) return null;
-
-      // Compute character offset within the identified container
-      const off = offsetInElementFromPoint(el, e.clientX, e.clientY);
-      if (off == null) return null;
-
-      // Find the sentence in this element that spans the offset
-      let idx = -1;
-      for (let i = 0; i < tts.meta.length; i++) {
-        const m = tts.meta[i];
-        if (m.el === el && off >= m.start && off < m.end) {
-          idx = i;
-          break;
-        }
-      }
-
-      // Fallback: first sentence in this element
-      if (idx < 0) {
-        idx = tts.meta.findIndex(m => m.el === el);
-      }
-      return idx;
-    }
 
     // Double click on sentence to start playing there
     contentHost.addEventListener("dblclick", async (e) => {

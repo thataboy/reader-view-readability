@@ -1907,6 +1907,22 @@ Readability.prototype = {
     return false;
   },
 
+  // Example helper to check if an image is "large"
+  _isLargeImage(node) {
+    var imgs = this._getAllNodesWithTag(node, ["img"]);
+    for (var i = 0; i < imgs.length; i++) {
+      var img = imgs[i];
+      var w = parseInt(img.getAttribute("width") || img.style.width, 10);
+      var h = parseInt(img.getAttribute("height") || img.style.height, 10);
+
+      // Define your significance threshold (e.g., larger than 300px)
+      if (w > 500 && h > w * 0.3 || h > 500 && w > h * 0.3) {
+        return true;
+      }
+    }
+    return false;
+  },
+
   /**
    * Find all <noscript> that are located after <img> nodes, and which contain only one
    * <img> element. Replace the first image with the image from inside the <noscript> tag,
@@ -2472,6 +2488,10 @@ Readability.prototype = {
       var isDataTable = function (t) {
         return t._readabilityDataTable;
       };
+
+      if (this._isLargeImage(node)) {
+        return false;
+      }
 
       var isList = tag === "ul" || tag === "ol";
       if (!isList) {

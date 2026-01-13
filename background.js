@@ -103,6 +103,7 @@ function sanitizeVox(text) {
     .replace(/[()[\]|~`/…]/g, ' ')
     // .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
     .replace(/[“”"]/g, ' ')
+    .replace(/\!{2,}/g, '!')
     // .replace(/[‘’]/g, "'")
     .replace(/(\.|\*|\-){3,}/g, ' ')
     // .replace(/-(?![a-zA-Z])|(?<![a-zA-Z])-/g, ' ')
@@ -171,6 +172,7 @@ function sanitizeSupertonic(str) {
   if (!str) return "";
   return str
     .replace(/[><()\[\]^]/g, ' ')
+    .replace(/\!{2,}/g, '!')
     // remove emojis
     // .replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, "")
     // normalize special chars

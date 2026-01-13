@@ -629,7 +629,7 @@
     setupTTSControls(container, contentHost, prefs);
   }
 
-  const BLOCKS = "p, div, blockquote, li, h1, h2, h3, h4, h5, h6, pre";
+  const BLOCKS = "p, div, blockquote, li, h1, h2, h3, h4, h5, h6, pre, ol, ul";
 
   // Pre-compile regexes and moves constants outside for performance
   const ABBREV = new Set([
@@ -690,7 +690,16 @@
     const scope = rootEl.querySelector('section[name="articleBody"]') || rootEl.querySelector('#rv-article-body');
     if (!scope) return { texts: [], meta: [] };
 
-    const paras = scope.querySelectorAll(`:is(${BLOCKS}):not(:has(${BLOCKS})):not(header *):not(footer *):not(caption *):not([aria-hidden] *)`);
+    const allBlocks = Array.from(scope.querySelectorAll(`:is(${BLOCKS}):not(header *):not(footer *):not(caption *):not([aria-hidden] *)`));
+
+    // Filter for containers that have direct text or are leaf nodes
+    const validContainers = allBlocks.filter(el => {
+      const hasDirectText = Array.from(el.childNodes).some(n =>
+        n.nodeType === Node.TEXT_NODE && n.nodeValue.trim().length > 5
+      );
+      return hasDirectText || !el.querySelector(BLOCKS);
+    });
+
     const texts = [];
     const meta = [];
 
@@ -714,12 +723,40 @@
       meta.push({ el, start: s, end: e });
     }
 
-    for (const el of paras) {
-      const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    // Use a Set for O(1) lookups inside the TreeWalker
+    const containerSet = new Set(validContainers);
+    const SKIP_ELEMENTS = [
+      'sup',
+      'label',
+      'caption',
+      'figcaption',
+      'sup *',
+      'label *',
+      'caption *',
+      'figcaption *',
+      '[id*="caption"]',
+    ].join(', ');
+
+    for (const el of validContainers) {
+      // Use matches() to skip sup/label and check containerSet to prevent double-reading nested blocks
+      const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+        acceptNode: (n) => {
+          const p = n.parentElement;
+          if (p.matches(SKIP_ELEMENTS)) return NodeFilter.FILTER_REJECT;
+
+          let walk = p;
+          while (walk && walk !== el) {
+            if (containerSet.has(walk)) return NodeFilter.FILTER_REJECT;
+            walk = walk.parentElement;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+
       let plain = "";
+      let n;
       while (n = tw.nextNode()) {
-        if (n.parentElement?.closest('sup') || n.parentElement?.closest('label')) continue;
-        plain += tw.currentNode.nodeValue;
+        plain += n.nodeValue;
       }
       if (!plain) continue;
 
@@ -736,7 +773,7 @@
         // Determine if we should end the current group
         const trimmed = pendingText.trim();
 
-        // Check abbreviation: Fast path for "Dr.", "Mr.", etc.
+        // Check abbreviation
         let isAbbrev = false;
         if (trimmed.endsWith('.')) {
           if (RE_ABBREV_FALLBACK.test(trimmed)) isAbbrev = true;
@@ -746,7 +783,6 @@
           }
         }
 
-        // Only emit if not an abbreviation AND we meet the length requirement
         if (!isAbbrev && trimmed.length >= MIN_CHARS) {
           emit(plain, el, groupStart, groupEnd);
           groupStart = -1;
@@ -754,7 +790,7 @@
         }
       }
 
-      // Emit any remaining text in the paragraph
+      // Emit remaining text
       if (groupStart !== -1) {
         emit(plain, el, groupStart, groupEnd);
       }
@@ -822,10 +858,6 @@
     if (!window.Readability) { console.error("Readability not found. Inject readability.js first."); return; }
 
     const cloned = document.cloneNode(true);
-    // if there is <article> remove all blocks not a descendant or ancestor of <article>
-    if (cloned.querySelector('article')) {
-      cloned.querySelectorAll(`:is(${BLOCKS}):not(article *):not(:has(article))`).forEach(el => el.remove());
-    }
     const REMOVE_SELECTORS = [
       'script',
       'noscript',
@@ -834,18 +866,29 @@
       'form',
       'header',
       'footer',
+      'aside',
+      'nav',
       '[class*="tags"]',
+      '[class*="title"]',
       '[class*="signup"]',
+      '[class*="social"]',
       '[class*="subscribe"]',
       '[class*="subscription"]',
       '[class*="hidden"]',
+      '[class*="restricted"]',
+      '[class*="to-read"]',
       '[class*="share"]'
     ].join(', ');
     cloned.querySelectorAll(REMOVE_SELECTORS).forEach(el => el.remove());
     cleanJunkElements(cloned);
 
+    // if there is <article> remove all blocks not a descendant or ancestor of <article>
+    if (cloned.querySelector('article')) {
+      cloned.querySelectorAll(`:is(${BLOCKS}):not(article *):not(:has(article))`).forEach(el => el.remove());
+    }
+
     const article = new window.Readability(cloned).parse();
-    if (!article || !article.content) { console.warn("Readability returned no content."); return; }
+    if (!article || !article.content) { console.log("Readability returned no content."); return; }
 
     container = buildOverlay(article.content, article.title, article.byline);
 
@@ -1178,31 +1221,41 @@
     };
 
     function findIdxAtClick(e) {
-      // Start from a visible block near the click
-      const base = e.target.closest(BLOCKS);
-      if (!base) return null;
+      const scope = contentHost.querySelector('section[name="articleBody"]') || contentHost.querySelector('#rv-article-body');
+      if (!scope) return null;
 
-      // Snap to our LEAF block (same rule used in segmentSentences)
-      const leafSel = `:is(${BLOCKS}):not(:has(${BLOCKS}))`;
-      const leafEl = base.closest(leafSel);
-      if (!leafEl) return null;
+      // Start from the block element that was actually clicked
+      let el = e.target.closest(BLOCKS);
+      if (!el) return null;
 
-      // Compute character offset within the leaf element
-      const off = offsetInElementFromPoint(leafEl, e.clientX, e.clientY);
+      // Walk up until we find the element we actually registered in tts.meta.
+      // We stop at scope to stay within the article bounds.
+      while (el && scope.contains(el)) {
+        if (tts.meta.some(m => m.el === el)) break;
+        const parent = el.parentElement?.closest(BLOCKS);
+        if (!parent) break;
+        el = parent;
+      }
+
+      if (!el) return null;
+
+      // Compute character offset within the identified container
+      const off = offsetInElementFromPoint(el, e.clientX, e.clientY);
       if (off == null) return null;
 
       // Find the sentence in this element that spans the offset
       let idx = -1;
       for (let i = 0; i < tts.meta.length; i++) {
         const m = tts.meta[i];
-        if (m.el === leafEl && off >= m.start && off < m.end) {
+        if (m.el === el && off >= m.start && off < m.end) {
           idx = i;
           break;
         }
       }
+
       // Fallback: first sentence in this element
       if (idx < 0) {
-        idx = tts.meta.findIndex(m => m.el === leafEl);
+        idx = tts.meta.findIndex(m => m.el === el);
       }
       return idx;
     }

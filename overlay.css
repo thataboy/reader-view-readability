@@ -171,6 +171,12 @@
     margin-left: 6px;
     margin-right: 6px;
 }
+#rv-voice {
+    vertical-align: middle !important;
+}
+#rv-voice:focus {
+  outline: none !important;
+}
 #rv-speed {
     width: 120px;
     margin-left: 6px;
@@ -208,11 +214,10 @@ html.rv-active body {
 }
 #rv-toolbar label {
     font-size: 14px;
-    margin: 0 10 0 2px;
+    margin: 0 4px 0 2px;
     padding: 0;
     display: inline-flex;
-    align-items: center;
-    vertical-align: bottom;
+    vertical-align: bottom !important;
 }
 #rv-tts-status,
 #rv-speed-label {

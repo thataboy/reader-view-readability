@@ -172,11 +172,15 @@
     return task;
   }
 
-  function playAt(idx) {
-    stopPlayback();
+  function playAt(idx, moveOnly=false) {
     if (idx < 0 || idx >= tts.segments.length) return;
     tts.index = idx;
-    highlightCurrent(idx);
+    if (moveOnly || !tts.server) {
+      highlightCurrent(); saveReadingProgress();
+      return;
+    }
+    stopPlayback();
+    highlightCurrent();
     tts.playing = true;
     tts.btnPlay.style.display = 'none';
     tts.controls.style.display = 'inherit';
@@ -189,7 +193,7 @@
     tts.index = index;
     const _sig = sig();
 
-    highlightCurrent(index);
+    highlightCurrent();
     try {
       // Fetch and Wait for this segment's audio
       const cur = await fetchAndDecodeSegment(index, _sig);
@@ -278,6 +282,7 @@
     tts.controls.style.display = 'none';
     tts.inFlight.clear();
     // doesn't hurt to send cancel to server
+    if (tts.server == Server.VOX_ANE)
     try { chrome.runtime.sendMessage({
       type: "tts.cancel",
       payload: { server: tts.server }
@@ -286,7 +291,7 @@
     setStatus();
   }
 
-  function invalidateAudio(continuePlay) {
+  function invalidateAudio(continuePlay=false) {
     const wasPlaying = tts.playing;
     stopPlayback();
     tts.decoded.clear();
@@ -382,7 +387,7 @@
     return r;
   }
 
-  function highlightCurrent(index) {
+  function highlightCurrent(index=tts.index) {
     clearHighlight();
     const m = tts.meta && tts.meta[index];
     if (!m) return;
@@ -629,8 +634,6 @@
     document.addEventListener("copy", onCopy, true);
     document.documentElement.appendChild(overlay);
     surface.focus();
-
-    setupTTSControls();
   }
 
   const BLOCKS = "p, div, blockquote, li, h1, h2, h3, h4, h5, h6, pre, ol, ul";
@@ -815,7 +818,8 @@
     return { texts, meta };
   }
 
-  function refreshSegments() {
+  // segment page into sentence chunks for TTS
+  function buildSegments() {
     // Remember the current position to restore it after re-segmenting
     let savedEl = null;
     let savedOffset = 0;
@@ -839,30 +843,12 @@
       const newIdx = tts.meta.findIndex(m => m.el === savedEl && m.start >= savedOffset);
       tts.index = newIdx !== -1 ? newIdx : 0;
     } else {
-      tts.index = 0;
+      // clamp tts.index
+      if (tts.index + 1 >= tts.segments.length) tts.index = 0;
     }
 
-    setTimeout(() => {
-      highlightCurrent(tts.index);
-      setStatus();
-    }, tts.segments.length < 1000 ? 300 : 1000);
-  }
-
-  const junkPhrases = [
-    'Skip to main content',
-    'Sign up for',
-    'Subscribe to',
-    'Continue reading',
-    'Most Popular',
-    'Follow us on',
-    'Abonnez-vous gratuitement'
-  ];
-
-  function cleanJunkElements(root) {
-    const elements = root.querySelectorAll(`:is(${BLOCKS},a):not(:has(${BLOCKS}))`);
-    elements.forEach(el => {
-      if (junkPhrases.some(phrase => el.textContent.includes(phrase))) el.remove();
-    });
+    highlightCurrent();
+    setStatus();
   }
 
   // --------------------------
@@ -907,7 +893,19 @@
       }
     }
     cloned.querySelectorAll(REMOVE_SELECTORS.join(',')).forEach(el => el.remove());
-    cleanJunkElements(cloned);
+
+    const junkPhrases = [
+      'Skip to main content',
+      'Sign up for',
+      'Subscribe to',
+      'Continue reading',
+      'Most Popular',
+      'Follow us on',
+      'Abonnez-vous gratuitement'
+    ];
+    cloned.querySelectorAll(`:is(${BLOCKS},a):not(:has(${BLOCKS}))`).forEach(el => {
+      if (junkPhrases.some(phrase => el.textContent.includes(phrase))) el.remove();
+    });
 
     // if there is <article> remove all blocks not a descendant or ancestor of <article>
     if (cloned.querySelector('article')) {
@@ -927,47 +925,12 @@
     prefs = await loadPrefs();
     tts.server = prefs.server;
     attachOverlay();
+    await setupTTSControls();
 
-    let progressRestored = false;
     const savedProgress = prefs.readingProgress[currentPageUrl];
+    tts.index = savedProgress?.index || 0;
 
-    refreshSegments();
-    const currentSegmentCount = tts.segments.length;
-    // Check if the saved progress is for a long page and the index is valid
-    if (savedProgress?.segments >= LONG_PAGE_THRESHOLD && savedProgress.index > 0) {
-      // Only restore if the total number of segments hasn't changed drastically (e.g., +/- 10%)
-      if (Math.abs(savedProgress.segments - currentSegmentCount) < currentSegmentCount * 0.1) {
-        // Restore the index (other tts properties are already set)
-        tts.index = Math.min(savedProgress.index, currentSegmentCount - 1); // Clamp index
-        // Jumps the view to the last read position
-        highlightCurrent(tts.index);
-        setStatus();
-        progressRestored = true;
-      } else {
-        // If the article changed, remove the stale progress
-        delete prefs.readingProgress[currentPageUrl];
-        savePrefs();
-      }
-    }
-
-    if (!progressRestored) {
-        // If no progress restored, ensure index is 0 and set default status
-        tts.index = 0;
-        setStatus();
-    }
-
-    // Set icons
-    setIcon("rv-close", "exit.png");
-    setIcon("rv-font-inc", "text_increase.png");
-    setIcon("rv-font-dec", "text_decrease.png");
-    setIcon("rv-width-widen", "widen.png");
-    setIcon("rv-width-narrow", "shrink.png");
-    setIcon("rv-tts-play", "TTS.png");
-    setIcon("rv-tts-stop", "stop.png");
-    setIcon("rv-tts-prev", "prev.png");
-    setIcon("rv-tts-prevp", "pprev.png");
-    setIcon("rv-tts-next", "next.png");
-    setIcon("rv-tts-nextp", "nnext.png");
+    buildSegments();
   }
 
   function generateRatingControlHTML(rating) {
@@ -1030,10 +993,10 @@
           if (event.target.checked) {
               const newServer = parseInt(event.target.value, 10);
               if (newServer == tts.server) return;
-              invalidateAudio(false);
+              invalidateAudio();
               tts.server = newServer;
               prefs.server = newServer;
-              refreshSegments();
+              buildSegments();
               speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
               speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
               updateRatingDisplay();
@@ -1148,6 +1111,19 @@
   // TTS Controls
   // --------------------------
   async function setupTTSControls() {
+    // Set icons
+    setIcon("rv-close", "exit.png");
+    setIcon("rv-font-inc", "text_increase.png");
+    setIcon("rv-font-dec", "text_decrease.png");
+    setIcon("rv-width-widen", "widen.png");
+    setIcon("rv-width-narrow", "shrink.png");
+    setIcon("rv-tts-play", "TTS.png");
+    setIcon("rv-tts-stop", "stop.png");
+    setIcon("rv-tts-prev", "prev.png");
+    setIcon("rv-tts-prevp", "pprev.png");
+    setIcon("rv-tts-next", "next.png");
+    setIcon("rv-tts-nextp", "nnext.png");
+
     const speedInp = overlay.querySelector("#rv-speed");
     const speedLabel = overlay.querySelector("#rv-speed-label");
     const btnPrev = overlay.querySelector("#rv-tts-prev");
@@ -1207,7 +1183,7 @@
         updateRatingDisplay();
         updateSpeedUI();
         savePrefs();
-        invalidateAudio(false);
+        invalidateAudio();
       }
     });
 
@@ -1222,20 +1198,19 @@
         prefs.speeds[tts.server][tts.voice] = newSpeed;
 
         savePrefs();
-        invalidateAudio(false);
+        invalidateAudio();
       }
     });
 
     tts.scrl.addEventListener("change", () => {
       prefs.autoScroll = tts.scrl.checked;
       savePrefs();
-      highlightCurrent(tts.index);
+      highlightCurrent();
       highlightReading();
     });
 
     // Button handlers
     tts.btnPlay.onclick = async () => {
-      if (!tts.server || tts.playing) return;
       const startIndex = Math.max(0, tts.index);
       playAt(startIndex);
     };
@@ -1279,10 +1254,10 @@
       playAt(nextStart);
     };
 
-    function playAtClick(e) {
+    function playAtClick(e, moveOnly=false) {
       e.preventDefault();
       const idx = findIdxAtClick(e);
-      if (idx !== null) playAt(idx);
+      if (idx !== null) playAt(idx, moveOnly);
     }
 
     // dbl click, middle click, or meta + click on sentence while not playing to start playing there
@@ -1299,8 +1274,8 @@
         if (!tts.playing) playAtClick(e);
         return;
       }
-      // Single click on sentence while playing to jump there
-      if (tts.playing) playAtClick(e);
+      // Single click: if playing, then start playing there, else just move index
+      playAtClick(e, moveOnly = !tts.playing);
     }, true);
 
   }

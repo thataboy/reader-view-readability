@@ -4,12 +4,21 @@
 }
 #rv-surface {
     position: fixed;
+    top: 0;
+    left: 0;
     inset: 0;
-    overflow: auto;
+    width: 100vw;
+    height: 100vh;
     background: var(--rv-bg);
     color: var(--rv-fg);
     font-size: var(--rv-font-size, 17px);
     line-height: 1.7em;
+    overflow-y: scroll !important;
+    overflow-x: hidden !important;
+    scrollbar-gutter: stable both-edges;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    z-index: 2147483647;
 }
 #rv-content {
     max-width: var(--rv-maxw, 860px);
@@ -131,17 +140,6 @@
 .rv-inline {
     display: inline-flex;
     align-items: center;
-}
-#rv-surface {
-    position: fixed;
-    inset: 0;
-    height: 100vh;
-    overflow-y: scroll !important;
-    overflow-x: hidden !important;
-    scrollbar-gutter: stable both-edges;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior: contain;
-    z-index: 2147483647;
 }
 #rv-surface:focus {  /* remove focus ring by chrome */
   outline: none !important;

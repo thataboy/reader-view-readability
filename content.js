@@ -81,7 +81,7 @@
   function ttsKey(i){ return `${sig()}:${i}`; }
   function ensureCtx() {
     if (!tts.audioCtx || tts.audioCtx.state === "closed") {
-      tts.audioCtx = new (AudioContext || webkitAudioContext)({ sampleRate: 44100 });
+      tts.audioCtx = new (AudioContext || webkitAudioContext)();
     }
     return tts.audioCtx;
   }
@@ -340,9 +340,8 @@
   } catch {}
 
   function setIcon(btn_id, file) {
-    const btn = document.getElementById(btn_id);
-    const img = btn && btn.querySelector("img");
-    if (img) img.src = chrome.runtime.getURL(`icons/${file}`);
+    document.querySelector(`#${btn_id} img`)?.
+      setAttribute('src', chrome.runtime.getURL(`icons/${file}`));
   }
 
   function clearHighlight() {
@@ -499,7 +498,7 @@
         <div id="rv-content">
           ${article.title ? `<h1>${article.title}</h1>` : ""}
           ${article.byline ? `<p><em>${article.byline}</em></p>` : ""}
-          <div id="rv-article-body">${article.content}</div>
+          <div id="rv-article-body"></div>
         </div>
       </div>
     `;
@@ -533,19 +532,16 @@
     tts.scrl = overlay.querySelector("#rv-scrl");
     setStatus();
 
-    const outside = Array.from(document.body.children).filter(n => n !== overlay);
-    outside.forEach(n => { try { n.setAttribute("inert", ""); } catch(_){} });
-
-    document.documentElement.classList.add("rv-active");
-
+    // const outside = Array.from(document.body.children).filter(n => n !== overlay);
+    // outside.forEach(n => { try { n.setAttribute("inert", ""); } catch(_){} });
     async function cleanup() {
       await saveReadingProgress();
       stopPlayback();
+      overlay.remove();
       document.removeEventListener("keyup", onKey, true);
       document.removeEventListener("copy", onCopy, true);
-      outside.forEach(n => { try { n.removeAttribute("inert"); } catch(_){} });
+      // outside.forEach(n => { try { n.removeAttribute("inert"); } catch(_){} });
       document.documentElement.classList.remove("rv-active");
-      overlay.remove();
       if (!tts) return;
       if (tts.audioCtx) {
         try { tts.audioCtx.close(); } catch {}
@@ -858,6 +854,8 @@
     const existing = document.getElementById("reader-view-overlay");
     if (existing) { existing.querySelector("#rv-close")?.click(); return; }
     if (!window.Readability) { console.error("Readability not found. Inject readability.js first."); return; }
+    // console.time('total');
+    // console.time('prep');
 
     const cloned = document.cloneNode(true);
     const REMOVE_SELECTORS = [
@@ -919,18 +917,38 @@
     };
     const article = new window.Readability(cloned, options).parse();
     if (!article || !article.content) { console.log("Readability returned no content."); return; }
+    // console.timeEnd('prep');
+    // console.time('rv-active');
 
+    document.documentElement.classList.add("rv-active");
+    // console.timeEnd('rv-active');
+    // console.time('buildoverlay');
     buildOverlay(article);
+    // console.timeEnd('buildoverlay');
 
     prefs = await loadPrefs();
     tts.server = prefs.server;
+    // console.time('attachoverlay');
     attachOverlay();
+    // console.timeEnd('attachoverlay');
+    // console.time('setuptts');
     await setupTTSControls();
+    // console.timeEnd('setuptts');
 
     const savedProgress = prefs.readingProgress[currentPageUrl];
     tts.index = savedProgress?.index || 0;
 
+    // don't attach article content until we finish building UI
+    // otherwise adding UI elements causes DOM restructuring
+    // which is slow on very large pages
+    // console.time('insert content');
+    overlay.querySelector('#rv-article-body').innerHTML = article.content;
+    // console.timeEnd('insert content');
+
+    // console.time('segment');
     buildSegments();
+    // console.timeEnd('segment');
+    // console.timeEnd('total');
   }
 
   function generateRatingControlHTML(rating) {
@@ -957,7 +975,8 @@
     const serversDiv = overlay.querySelector('#rv-servers');
     const speedInp = overlay.querySelector("#rv-speed");
     const speedLabel = overlay.querySelector("#rv-speed-label");
-    const rating = overlay.querySelector("#rv-rating-control");
+    const fragment = document.createDocumentFragment();
+
     let liveServer = null;
     for (const [id, server] of SERVERS.entries()) {
       if (!server.active) continue;
@@ -973,7 +992,9 @@
           liveServer ||= id;
         }
       } catch {}
+
       if (!server.voices.length) continue;
+
       const radioInput = document.createElement('input');
       radioInput.type = 'radio';
       radioInput.id = `server-${id}`;
@@ -986,8 +1007,8 @@
       radioLabel.htmlFor = `server-${id}`;
       radioLabel.textContent = server.name;
 
-      serversDiv.appendChild(radioInput);
-      serversDiv.appendChild(radioLabel);
+      fragment.appendChild(radioInput);
+      fragment.appendChild(radioLabel);
 
       radioInput.addEventListener('change', (event) => {
           if (event.target.checked) {
@@ -1006,6 +1027,7 @@
       });
     }
 
+    serversDiv.appendChild(fragment);
     // fallback to first live server if current server is not responding
     if (!SERVERS.get(tts.server)?.voices.length) tts.server = liveServer;
   }
@@ -1024,15 +1046,15 @@
       // voiceData.sort((a, b) => b.rating - a.rating);
 
       // 3. Populate dropdown
-      tts.voiceEl.innerHTML = "";
-
+      const fragment = document.createDocumentFragment();
       for (const data of voiceData) {
         const opt = document.createElement("option");
         opt.value = data.name;
         const stars = '⭐'.repeat(Math.min(3, data.rating));
         opt.textContent = stars ? `${data.name}  ${stars}` : data.name;
-        tts.voiceEl.appendChild(opt);
+        fragment.appendChild(opt);
       }
+      tts.voiceEl.appendChild(fragment);
 
       // 4. Set selected voice
       const preferred = prefs.voice[tts.server];
@@ -1044,9 +1066,9 @@
   }
 
   function updateSpeedUI() {
-      const serverDef = SERVERS.get(tts.server);
+      const serverDefault = SERVERS.get(tts.server)?.speed || 1.0;
       const savedSpeed = prefs.speeds?.[tts.server]?.[tts.voice];
-      const speedValue = savedSpeed ?? serverDef.speed ?? 1.0;
+      const speedValue = savedSpeed ?? serverDefault;
       const speedInp = overlay.querySelector("#rv-speed");
       const speedLabel = overlay.querySelector("#rv-speed-label");
       tts.speed = speedValue;
@@ -1054,7 +1076,7 @@
       speedLabel.textContent = `${speedValue}x`;
   }
 
-  function paragraphStartIndexAt(idx) {
+  function paragraphStartIndexAt(idx) {00
     if (!tts.meta?.length || idx < 0 || idx >= tts.meta.length) return -1;
     const el = tts.meta[idx].el;
     while (idx > 0 && tts.meta[idx - 1].el === el) idx--;

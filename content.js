@@ -9,13 +9,17 @@
   const Server = Object.freeze({
       MY_KOKORO: 1,
       VOX_ANE: 2,
-      SUPERTONIC: 3
+      SUPERTONIC: 3,
+      POCKET: 4,
+      CANDLE: 5,
   });
 
   const SERVERS = new Map([
-    [Server.MY_KOKORO, {name: 'Kokoro', active: false, voices: [], speed: 1.0}],
-    [Server.VOX_ANE, {name: 'Vox', active: true, voices: [], speed: 1.0}],
-    [Server.SUPERTONIC, {name: 'SuperT', active: true, voices: [], speed: 1.2}]
+    [Server.MY_KOKORO, {name: 'Kokoro', active: false, voices: [], speed: 1.0, chunk_size: [35, 150]}],
+    [Server.VOX_ANE, {name: 'Vox', active: false, voices: [], speed: null, chunk_size: [35, 200]}],
+    [Server.SUPERTONIC, {name: 'SuperT', active: true, voices: [], speed: 1.2, chunk_size: [75, 300]}],
+    [Server.POCKET, {name: 'Pocket', active: true, voices: [], speed: null, chunk_size: [20, 300]}],
+    [Server.CANDLE, {name: 'Candle', active: true, voices: [], speed: null, chunk_size: [20, 300]}],
   ]);
 
   let prefs;        // saved preferences
@@ -26,7 +30,7 @@
   // Storage helpers
   // --------------------------
   const STORAGE_KEY = "rv_prefs_v1";
-  const defaults = { fontSize: 17, maxWidth: 860, server: Server.VOX_ANE, voice: {}, speeds: {}, ratings: {}, readingProgress: {}, autoScroll: true };
+  const defaults = { fontSize: 17, maxWidth: 860, server: Server.SUPERTONIC, voice: {}, speeds: {}, ratings: {}, readingProgress: {}, autoScroll: true };
   async function loadPrefs() {
     try {
       const out = await chrome.storage.local.get(STORAGE_KEY);
@@ -46,7 +50,7 @@
   // --------------------------
   const tts = {
     prepared: false,
-    server: Server.VOX_ANE,
+    server: Server.SUPERTONIC,
     voice: '',
     speed: 1.0,
     audioCtx: null,
@@ -542,7 +546,6 @@
       document.removeEventListener("copy", onCopy, true);
       // outside.forEach(n => { try { n.removeAttribute("inert"); } catch(_){} });
       document.documentElement.classList.remove("rv-active");
-      if (!tts) return;
       if (tts.audioCtx) {
         try { tts.audioCtx.close(); } catch {}
       }
@@ -552,6 +555,7 @@
       tts.texts = [];
       tts.index = 0;
       tts.decoded.clear();
+      tts.inFlight.clear();
       tts.currentSrc = null;
       tts.meta = [];
       tts.highlightSpan = null;
@@ -632,7 +636,7 @@
     surface.focus();
   }
 
-  const BLOCKS = "p, div, blockquote, li, h1, h2, h3, h4, h5, h6, pre, ol, ul";
+  const BLOCKS = "p, div, blockquote, li, dt, dd, h1, h2, h3, h4, h5, h6, pre";
 
   // Pre-compile regexes and moves constants outside for performance
   const ABBREV = new Set([
@@ -702,10 +706,7 @@
   ].join(', ');
 
   function segmentSentences() {
-    const isVox = tts.server == Server.VOX_ANE;
-    const isSuper = tts.server == Server.SUPERTONIC;
-    const MIN_CHARS = isVox ? 35 : (isSuper ? 75 : 35);
-    const MAX_CHARS = isVox ? 200 : (isSuper ? 600 : 300);
+    const [MIN_CHARS, MAX_CHARS] = SERVERS.get(tts.server)?.chunk_size || [35, 150];
 
     const scope = contentHost.querySelector("#rv-article-body");
     if (!scope) return { texts: [], meta: [] };
@@ -752,11 +753,13 @@
 
     for (const el of validContainers) {
       // Use matches() to skip sup/label and check containerSet to prevent double-reading nested blocks
+      let inBlockQuote = false;
       const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
         acceptNode: (n) => {
           const p = n.parentElement;
           if (p.matches('sup, sup *, label, label *')) return NodeFilter.FILTER_REJECT;
           if (SKIP_TEXTS.some(txt => n.textContent.includes(txt))) return NodeFilter.FILTER_REJECT;
+          if (p.matches('blockquote, blockquote *')) inBlockQuote = true;
 
           let walk = p;
 
@@ -774,6 +777,12 @@
         plain += n.nodeValue;
       }
       if (!plain) continue;
+
+      // fix for <blockquote> text somehow getting turned into
+      // " ...... "
+      // " ...... "
+      // which screws up our segmenting
+      if (inBlockQuote) plain = plain.replace(/["\r\n]/g, ' ').replace(/\s{2,}/g, ' ');
 
       const segments = SEGMENTER.segment(plain);
       let groupStart = -1;
@@ -883,6 +892,7 @@
     ];
     PER_SITE_REMOVE = [
       ['lesswrong.com', '[class*="FixedPositionToC"]'],
+      ['stratechery.com', 'sup, sup *'],
     ];
     for (const [url, elem] of PER_SITE_REMOVE) {
       if (currentPageUrl.includes(url)) {
@@ -1018,8 +1028,8 @@
               tts.server = newServer;
               prefs.server = newServer;
               buildSegments();
-              speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
-              speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
+              speedInp.style.display = SERVERS.get(tts.server)?.speed ? 'inherit' : 'none';
+              speedLabel.style.display = speedInp.style.display;
               updateRatingDisplay();
               savePrefs();
               updateVoiceUI();
@@ -1027,7 +1037,7 @@
       });
     }
 
-    serversDiv.appendChild(fragment);
+    serversDiv.replaceChildren(fragment);
     // fallback to first live server if current server is not responding
     if (!SERVERS.get(tts.server)?.voices.length) tts.server = liveServer;
   }
@@ -1054,7 +1064,7 @@
         opt.textContent = stars ? `${data.name}  ${stars}` : data.name;
         fragment.appendChild(opt);
       }
-      tts.voiceEl.appendChild(fragment);
+      tts.voiceEl.replaceChildren(fragment);
 
       // 4. Set selected voice
       const preferred = prefs.voice[tts.server];
@@ -1154,8 +1164,8 @@
 
     await loadServerUI();
 
-    speedInp.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
-    speedLabel.style.display = (tts.server == Server.VOX_ANE) ? 'none': 'inherit';
+    speedInp.style.display = SERVERS.get(tts.server)?.speed ? 'inherit' : 'none';
+    speedLabel.style.display = speedInp.style.display;
 
     if (tts.server) updateVoiceUI();
     // hide play controls if no live server
@@ -1277,7 +1287,7 @@
     };
 
     function playAtClick(e, moveOnly=false) {
-      e.preventDefault();
+      if (!moveOnly) e.preventDefault();  // allow clicking on links
       const idx = findIdxAtClick(e);
       if (idx !== null) playAt(idx, moveOnly);
     }
@@ -1288,12 +1298,12 @@
     }, true);
 
     contentHost.addEventListener("mouseup", (e) => {
-      if (!tts.playing && e.button === 1) playAtClick(e);
+      if (e.button === 1) playAtClick(e);
     }, true);
 
     contentHost.addEventListener("click", (e) => {
       if (e.metaKey) {
-        if (!tts.playing) playAtClick(e);
+        playAtClick(e);
         return;
       }
       // Single click: if playing, then start playing there, else just move index

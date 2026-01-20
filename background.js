@@ -1,8 +1,3 @@
-const Server = Object.freeze({
-    MY_KOKORO: 1,
-    VOX_ANE: 2,
-    SUPERTONIC: 3
-});
 
 // ----- Reader View Injection (unchanged) -----
 async function injectAndToggle(tabId) {
@@ -21,25 +16,33 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   if (command === "toggle-reader" && tab && tab.id) injectAndToggle(tab.id);
 });
 
+const Server = Object.freeze({
+    MY_KOKORO: 1,
+    VOX_ANE: 2,
+    SUPERTONIC: 3,
+    POCKET: 4,
+    CANDLE: 5,
+});
 
 const SERVER_IP = navigator.userAgent.includes('Mac OS X') ? '127.0.0.1' : '192.168.1.11';
 
 const TTS_SERVER = new Map([
   [Server.MY_KOKORO, `http://${SERVER_IP}:9090`],
   [Server.VOX_ANE, `http://${SERVER_IP}:9000`],
-  [Server.SUPERTONIC, `http://${SERVER_IP}:8001`]
+  [Server.SUPERTONIC, `http://${SERVER_IP}:8001`],
+  [Server.POCKET, `http://${SERVER_IP}:9800`],
+  [Server.CANDLE, `http://${SERVER_IP}:9900`],
 ]);
 
-// Simple in-memory cache to avoid spamming the server
-// let __voicesCache = new Map();
-
 async function fetchVoices(server) {
-  // const v = __voicesCache.get(server);
-  // if (v) return v;
+  if (server == Server.CANDLE) {
+    const r = await fetch(`${TTS_SERVER.get(server)}/health`);
+    if (!r.ok) throw new Error('/health failed:');
+    return ['alba', 'marius', 'javert', 'jean', 'fantine', 'cosette', 'eponine', 'azelma'];
+  }
   const r = await fetch(`${TTS_SERVER.get(server)}/voices`);
   if (!r.ok) throw new Error(`/voices failed: ${r.status} ${r.statusText}`);
   const j = await r.json();
-  // __voicesCache.set(server, j.voices);
   return j.voices;
 }
 
@@ -185,6 +188,16 @@ function sanitizeSupertonic(str) {
     .trim();
 }
 
+function sanitizePocket(text) {
+  text = text?.trim();
+  if (!text) return null;
+  return text
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/([\.\?])[)"\]]/g, '$1')
+    ;
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.type) {
     sendResponse({ ok: false, error: "Invalid message" });
@@ -213,20 +226,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         let input = (server == Server.VOX_ANE) ? sanitizeVox(text)
                     : (server == Server.SUPERTONIC) ? sanitizeSupertonic(text)
+                    : (server == Server.POCKET) ? sanitizePocket(text)
                     : text?.trim();
-        if (!input || input.length < 5) {
+        if (!input || server != Server.POCKET && input.length < 5) {
           const buf = generateSilenceWav();
           const b64 = arrayBufferToBase64(buf);
           sendResponse({ ok: true, base64: b64 });
           return
         }
         input = expandAbbreviations(input);
-        const r = (server == Server.SUPERTONIC) ?
-        await fetch(`${TTS_SERVER.get(server)}/synthesize`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ input, voice, speed, lang })
-        }) : (server == Server.VOX_ANE) ?
+        const r = (server == Server.VOX_ANE) ?
         await fetch(`${TTS_SERVER.get(server)}/v1/audio/speech`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -236,11 +245,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             "inference_timesteps": fast ? 7 : 10,
             "response_format": "wav"
           })
+        }) : (server == Server.CANDLE) ?
+        await fetch(`${TTS_SERVER.get(server)}/v1/audio/speech`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({"model": "pocket-tts", input, voice})
         }) :
         await fetch(`${TTS_SERVER.get(server)}/synthesize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ input, voice, speed })
+          body: JSON.stringify({ input, voice, speed, lang})
         });
         if (!r.ok) {
           sendResponse({ error: `/synthesize failed: ${r.status} ${r.statusText}` });

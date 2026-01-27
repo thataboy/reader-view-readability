@@ -26,21 +26,18 @@ const Server = Object.freeze({
 
 const SERVER_IP = navigator.userAgent.includes('Mac OS X') ? '127.0.0.1' : '192.168.1.11';
 
-const TTS_SERVER = new Map([
-  [Server.MY_KOKORO, `http://${SERVER_IP}:9090`],
-  [Server.VOX_ANE, `http://${SERVER_IP}:9000`],
-  [Server.SUPERTONIC, `http://${SERVER_IP}:8001`],
-  [Server.POCKET, `http://${SERVER_IP}:9800`],
-  [Server.CANDLE, `http://${SERVER_IP}:9900`],
+const SERVERS = new Map([
+  [Server.MY_KOKORO, {port: 9090, min_len: 2}],
+  [Server.VOX_ANE, {port: 9000, sanitizer: sanitizeVox, min_len: 5}],
+  [Server.SUPERTONIC, {port: 8001, sanitizer: sanitizeSupertonic, min_len: 5}],
+  [Server.POCKET, {port: 9800, sanitizer: sanitizePocket, min_len: 2}],
+  [Server.CANDLE, {
+    port: 9900, sanitizer: sanitizePocket, min_len: 2, extra_params: {'model': 'pocket-tts'},
+  }],
 ]);
 
 async function fetchVoices(server) {
-  if (server == Server.CANDLE) {
-    const r = await fetch(`${TTS_SERVER.get(server)}/health`);
-    if (!r.ok) throw new Error('/health failed:');
-    return ['alba', 'marius', 'javert', 'jean', 'fantine', 'cosette', 'eponine', 'azelma'];
-  }
-  const r = await fetch(`${TTS_SERVER.get(server)}/voices`);
+  const r = await fetch(`http://${SERVER_IP}:${SERVERS.get(server).port}/voices`);
   if (!r.ok) throw new Error(`/voices failed: ${r.status} ${r.statusText}`);
   const j = await r.json();
   return j.voices;
@@ -98,8 +95,6 @@ function generateSilenceWav() {
 
 // fix a bunch of weird quirks with VoxCPM
 function sanitizeVox(text) {
-  text = text?.trim();
-  if (!text) return null;
   // Vox freaks out if text is all caps
   if (/^[^a-z]*[A-Z][^a-z]*$/.test(text)) text = text.toLowerCase();
   return text
@@ -133,6 +128,9 @@ const ABBREVIATION_MAP = {
   "Dr.": "Doctor",
   "V.": "versus",
   "v.": "versus",
+  "A.I.": "eigh eye",
+  "AI": "eigh eye",
+  "MacOS": "mac oh ess",
   "lbs.": "pounds",
   "lbs": "pounds",
   "Prof.": "Professor",
@@ -151,9 +149,11 @@ const ABBREVIATION_MAP = {
 
 // Escape dots and join keys into a single regex pattern
 const ABBR_REGEX = new RegExp(
+  '(?<=\\s|^)(' +
   Object.keys(ABBREVIATION_MAP)
     .map(k => k.replace('.', '\\.'))
-    .join('|') + '(?=\\s|$|\\b)',
+    .join('|')
+  + ')(?=\\s|$|\\b)',
   'g'
 );
 
@@ -172,11 +172,10 @@ const manualMap = {
   'œ': 'oe', 'Œ': 'OE',
   'ß': 'ss', 'ł': 'l', 'Ł': 'L'
 };
+
 function sanitizeSupertonic(str) {
-  if (!str) return "";
   return str
     .replace(/[><()\[\]^]/g, ' ')
-    .replace(/\!{2,}/g, '!')
     // remove emojis
     // .replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, "")
     // normalize special chars
@@ -189,13 +188,39 @@ function sanitizeSupertonic(str) {
 }
 
 function sanitizePocket(text) {
-  text = text?.trim();
-  if (!text) return null;
   return text
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
-    .replace(/([\.\?])[)"\]]/g, '$1')
+    .replace(/[[\]]/g, "")
+    .replace(/(\d)\.(\d)/g, '$1 point $2')
+    .replace(/([a-z]{2,3})\.([a-z]{2,3}\d)/g, '$1 dot $2')
+    // remove extraneous punctuation after . ? !
+    .replace(/([\.\?!])[^\s\p{L}\p{N}]+/gu, '$1 ')
+    .replace(/\$\s?([\d,]+(?:\.\d{2})?)/g, '$1 dollars')
+    // drop . from middle initial
+    .replace(/\s([A-Z])\.\s/g, ' $1 ')
+    // replace V.I.P. with VIP
+    .replace(/([A-Z]\.){3,}/g, (match) => {  return match.replace(/\./g, ""); } )
+    .trim()
     ;
+}
+
+function sanitizeAll(text) {
+  if (!text) return '';
+  return text
+    // Remove URLs (TTS engines usually mangle these)
+    .replace(/(https?:\/\/[^\s]+)/g, '')
+
+    // Whitelist: Keep letters (\p{L}), numbers (\p{N}),
+    // basic punctuation (\p{P}), and spaces (\s).
+    // This automatically strips emojis, arrows, and symbols.
+    .replace(/[^\p{L}\p{N}\p{P}\p{S}\s]/gu, '')
+
+    // !!! and ???
+    .replace(/([!?.])\1+/g, '$1')
+
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -215,7 +240,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       if (msg.type === "tts.synthesize") {
-        const { signature, out_of_order, fast, text, lang, voice, speed, server } = msg.payload || {};
+        const { signature, out_of_order, stream, text, lang, voice, speed, server } = msg.payload || {};
         if (signature !== `${server}|${voice}|${speed}`) {
           sendResponse({ error: `mismatched ${signature}`});
           return
@@ -224,37 +249,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ error: 'out_of_order'});
           return
         }
-        let input = (server == Server.VOX_ANE) ? sanitizeVox(text)
-                    : (server == Server.SUPERTONIC) ? sanitizeSupertonic(text)
-                    : (server == Server.POCKET) ? sanitizePocket(text)
-                    : text?.trim();
-        if (!input || server != Server.POCKET && input.length < 5) {
+
+        const serv = SERVERS.get(server);
+        let input = sanitizeAll(text);
+        if (serv.sanitizer) input = serv.sanitizer(input);
+        if (!input || input.length < serv.min_len) {
           const buf = generateSilenceWav();
           const b64 = arrayBufferToBase64(buf);
           sendResponse({ ok: true, base64: b64 });
           return
         }
         input = expandAbbreviations(input);
-        const r = (server == Server.VOX_ANE) ?
-        await fetch(`${TTS_SERVER.get(server)}/v1/audio/speech`, {
+
+        const body = {...{input, voice, lang, speed,}, ...(serv.extra_params??{})};
+
+        const r = await fetch(`http://${SERVER_IP}:${serv.port}/v1/audio/speech`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            input,
-            voice,
-            "inference_timesteps": fast ? 7 : 10,
-            "response_format": "wav"
-          })
-        }) : (server == Server.CANDLE) ?
-        await fetch(`${TTS_SERVER.get(server)}/v1/audio/speech`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({"model": "pocket-tts", input, voice})
-        }) :
-        await fetch(`${TTS_SERVER.get(server)}/synthesize`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ input, voice, speed, lang})
+          body: JSON.stringify(body)
         });
         if (!r.ok) {
           sendResponse({ error: `/synthesize failed: ${r.status} ${r.statusText}` });
@@ -268,7 +280,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       if (msg.type === "tts.cancel") {
         const { server } = msg.payload;
-        fetch(`${TTS_SERVER.get(server)}/v1/audio/speech/cancel`, { method: "POST" }).catch(() => {});
+        fetch(`http://${SERVER_IP}:${SERVERS.get(server).port}/v1/audio/speech/cancel`,
+          { method: "POST" }
+        ).catch(() => {});
         sendResponse({ ok: true });
         return;
       }

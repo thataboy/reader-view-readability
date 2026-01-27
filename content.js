@@ -15,11 +15,11 @@
   });
 
   const SERVERS = new Map([
-    [Server.MY_KOKORO, {name: 'Kokoro', active: false, voices: [], speed: 1.0, chunk_size: [35, 150]}],
-    [Server.VOX_ANE, {name: 'Vox', active: false, voices: [], speed: null, chunk_size: [35, 200]}],
-    [Server.SUPERTONIC, {name: 'SuperT', active: true, voices: [], speed: 1.2, chunk_size: [75, 300]}],
-    [Server.POCKET, {name: 'Pocket', active: true, voices: [], speed: null, chunk_size: [20, 300]}],
-    [Server.CANDLE, {name: 'Candle', active: true, voices: [], speed: null, chunk_size: [20, 300]}],
+    [Server.MY_KOKORO, {name: 'Kokoro', active: false, speed: 1.0, chunk_size: [35, 150]}],
+    [Server.VOX_ANE, {name: 'Vox', active: false, chunk_size: [35, 200]}],
+    [Server.SUPERTONIC, {name: 'SuperT', active: true, speed: 1.2, chunk_size: [75, 300], pause: 500}],
+    [Server.POCKET, {name: 'Pocket', active: true, chunk_size: [20, 300], pause: 350}],
+    [Server.CANDLE, {name: 'Candle', active: true, chunk_size: [20, 300], pause: 250}],
   ]);
 
   let prefs;        // saved preferences
@@ -150,7 +150,7 @@
             payload: {
               signature,
               out_of_order: i !== tts.index && !tts.decoded.has(ttsKey(tts.index)),
-              fast: i === tts.index,
+              stream: i === tts.index,  // stream when not pre-fetching
               text: tts.texts[i],
               lang: _lang,
               voice: tts.voice,
@@ -220,8 +220,10 @@
         tts.currentSrc = null;
         const next = tts.index + 1;
         if (next < tts.segments.length) {
-          if (tts.server == Server.SUPERTONIC) {
-            setTimeout(() => { scheduleAt(next); }, 500);
+          let pause = SERVERS.get(tts.server).pause || 0;
+          if (pause > 0) {
+            pause += (Math.random() * pause * 0.2);
+            setTimeout(() => { scheduleAt(next); }, Math.floor(pause));
           } else {
             scheduleAt(next);
           }
@@ -266,9 +268,9 @@
 
     } catch (err) {
       setStatus();
+      console.log("Playback error:", err);
       // advance only if index is current
       if (index == tts.index) tts.btnNext.click();
-      else console.log("Playback error:", err);
     }
   }
 
@@ -642,7 +644,7 @@
   const ABBREV = new Set([
     "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St", "Bros",
     "V", "v", "Fig", "Det", "Rev", "Sen", "Capt", "Sgt", "Col", "Adm",
-    "U.S", "U.K", "A.M", "P.M", "a.m", "p.m", "e.g", "i.e", "Vs", "vs", "cf",
+    "U.S", "U.K", "A.I", "A.M", "P.M", "a.m", "p.m", "e.g", "i.e", "Vs", "vs", "cf",
     "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug",
     "Sep", "Sept", "Oct", "Nov", "Dec",
   ]);
@@ -693,15 +695,17 @@
     'footer',
     'caption',
     'figcaption',
-    '[id*="caption"]',
-    '[class*="header"]',
+    '[attr*="caption"]',
+    '[attr*="header"]',
+    '[attr*="author"]',
     '[aria-hidden]',
     'header *',
     'footer *',
     'caption *',
     'figcaption *',
-    '[id*="caption"] *',
-    '[class*="header"] *',
+    '[attr*="caption"] *',
+    '[attr*="header"] *',
+    '[attr*="author"] *',
     '[aria-hidden] *',
   ].join(', ');
 
@@ -887,11 +891,12 @@
       '[class*="subscription"]',
       '[class*="hidden"]',
       '[class*="restricted"]',
-      '[class*="to-read"]',
+      '[class*="author-box"]',
       '[class*="share"]',
     ];
     PER_SITE_REMOVE = [
       ['lesswrong.com', '[class*="FixedPositionToC"]'],
+      ['slate.fr', '[class*="to-read"]'],
       ['stratechery.com', 'sup, sup *'],
     ];
     for (const [url, elem] of PER_SITE_REMOVE) {
@@ -922,7 +927,7 @@
 
     const options = {
       classesToPreserve: [
-        /header/,
+        /header|caption|author/,
       ],
     };
     const article = new window.Readability(cloned, options).parse();

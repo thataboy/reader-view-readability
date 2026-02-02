@@ -239,8 +239,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
 
-      if (msg.type === "tts.synthesize") {
-        const { signature, out_of_order, stream, text, lang, voice, speed, server } = msg.payload || {};
+      if (msg.type === "tts.synthesize" {
+        const { signature, out_of_order, text, lang, voice, speed, server } = msg.payload || {};
         if (signature !== `${server}|${voice}|${speed}`) {
           sendResponse({ error: `mismatched ${signature}`});
           return

@@ -30,8 +30,8 @@
     text-decoration: underline !important;
     opacity: 0.9 !important;
 }
-#rv-content img {
-    max-width: 90%;
+#rv-content svg {
+    width: 32px;
     height: auto;
 }
 #rv-content p {

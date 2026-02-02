@@ -17,9 +17,9 @@
   const SERVERS = new Map([
     [Server.MY_KOKORO, {name: 'Kokoro', active: false, speed: 1.0, chunk_size: [35, 150]}],
     [Server.VOX_ANE, {name: 'Vox', active: false, chunk_size: [35, 200]}],
-    [Server.SUPERTONIC, {name: 'SuperT', active: true, speed: 1.2, chunk_size: [75, 300], pause: 500}],
-    [Server.POCKET, {name: 'Pocket', active: true, chunk_size: [20, 300], pause: 350}],
-    [Server.CANDLE, {name: 'Candle', active: true, chunk_size: [20, 300], pause: 250}],
+    [Server.SUPERTONIC, {name: 'SuperT', active: true, speed: 1.2, chunk_size: [80, 350], pause: 500}],
+    [Server.POCKET, {name: 'Pocket', active: true, chunk_size: [80, 350], pause: 250}],
+    [Server.CANDLE, {name: 'Candle', active: true, chunk_size: [80, 350], pause: 250}],
   ]);
 
   let prefs;        // saved preferences
@@ -85,7 +85,10 @@
   function ttsKey(i){ return `${sig()}:${i}`; }
   function ensureCtx() {
     if (!tts.audioCtx || tts.audioCtx.state === "closed") {
-      tts.audioCtx = new (AudioContext || webkitAudioContext)();
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      // 'playback' hint encourages the OS to use the high-quality media path
+      // instead of the lower-quality 'communication' path.
+      tts.audioCtx = new AudioCtx({ latencyHint: "playback" });
     }
     return tts.audioCtx;
   }
@@ -110,7 +113,7 @@
     return bytes.buffer;
   }
 
-  // Decode Opus ArrayBuffer to AudioBuffer
+  // Decode ArrayBuffer to AudioBuffer
   function decodeBuffer(i, arrayBuffer) {
     const k = ttsKey(i);
     if (tts.decoded.has(k)) return tts.decoded.get(k);
@@ -144,13 +147,15 @@
       try {
         // Only one synth at a time goes through this lock
         setStatus(`T→S ${i + 1} / ${tts.segments.length}`);
+        // TODO: when i === tts.index, stream instead of
+        // fetching and waiting for whole audio
         const response = await withSynthLock(() =>
           chrome.runtime.sendMessage({
             type: "tts.synthesize",
             payload: {
               signature,
+              // out of order if prefetching but current index not fetched yet
               out_of_order: i !== tts.index && !tts.decoded.has(ttsKey(tts.index)),
-              stream: i === tts.index,  // stream when not pre-fetching
               text: tts.texts[i],
               lang: _lang,
               voice: tts.voice,
@@ -345,11 +350,6 @@
     });
   } catch {}
 
-  function setIcon(btn_id, file) {
-    document.querySelector(`#${btn_id} img`)?.
-      setAttribute('src', chrome.runtime.getURL(`icons/${file}`));
-  }
-
   function clearHighlight() {
     const target = tts.highlightSpan;
     if (!target) return;
@@ -472,7 +472,17 @@
     overlay.innerHTML = `
       <div id="rv-surface" role="dialog" aria-label="Reader View" tabindex="-1">
         <div id="rv-toolbar">
-          <button class="rv-btn" id="rv-close" title="Exit"><img></button>
+          <button class="rv-btn" id="rv-close" title="Exit">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+            fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            aria-hidden="true" focusable="false">
+            <path d="M14 4h6v16h-6"/>
+            <path d="M12 12H6"/>
+            <path d="m6 12 3-3"/>
+            <path d="m6 12 3 3"/>
+            <path d="M14 12h-1"/>
+          </svg>
+          </button>
           <div id="rv-tts">
             <div id="rv-servers"></div>
             <select id="rv-voice" title="Voice"></select>
@@ -481,13 +491,57 @@
             <input id="rv-speed" type="range" min="0.7" max="1.5" step="0.05" value="1.0" />
             </label>
             <span id="rv-speed-label"></span>
-            <button class="rv-btn" id="rv-tts-play" title="Speak"><img></button>
+            <button class="rv-btn" id="rv-tts-play" title="Speak">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true" focusable="false">
+              <path d="M11 5 6 9H3v6h3l5 4V5z"/>
+              <path d="M15.5 8.5a4.5 4.5 0 0 1 0 7"/>
+              <path d="M18 6a8 8 0 0 1 0 12"/>
+            </svg>
+            </button>
             <div id="rv-tts-controls" style="display:none">
-            <button class="rv-btn" id="rv-tts-stop" title="Stop"><img></button>
-            <button class="rv-btn" id="rv-tts-prevp" title="Previous paragraph"><img></button>
-            <button class="rv-btn" id="rv-tts-prev" title="Previous sentence"><img></button>
-            <button class="rv-btn" id="rv-tts-next" title="Next sentence"><img></button>
-            <button class="rv-btn" id="rv-tts-nextp" title="Next paragraph"><img></button>
+            <button class="rv-btn" id="rv-tts-stop" title="Stop">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true" focusable="false">
+              <rect x="7" y="7" width="10" height="10" rx="2"/>
+            </svg>
+            </button>
+            <button class="rv-btn" id="rv-tts-prevp" title="Previous paragraph">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true" focusable="false">
+              <path d="M19 12H9"/>
+              <path d="m11 7-5 5 5 5"/>
+              <path d="m15 7-5 5 5 5"/>
+            </svg>
+            </button>
+            <button class="rv-btn" id="rv-tts-prev" title="Previous sentence">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true" focusable="false">
+              <path d="M19 12H7"/>
+              <path d="m11 6-6 6 6 6"/>
+            </svg>
+            </button>
+            <button class="rv-btn" id="rv-tts-next" title="Next sentence">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true" focusable="false">
+              <path d="M5 12h12"/>
+              <path d="m13 6 6 6-6 6"/>
+            </svg>
+            </button>
+            <button class="rv-btn" id="rv-tts-nextp" title="Next paragraph">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true" focusable="false">
+              <path d="M5 12h10"/>
+              <path d="m13 7 5 5-5 5"/>
+              <path d="m9 7 5 5-5 5"/>
+            </svg>
+            </button>
             </div>
             <span id="rv-tts-status"></span>
           </div>
@@ -495,10 +549,61 @@
             <div id="rv-scrl-div">
             <input id="rv-scrl" type="checkbox"/><label for="rv-scrl">AutoScroll </label>
             </div>
-            <button class="rv-btn" id="rv-font-inc" title="Increase font"><img></button>
-            <button class="rv-btn" id="rv-font-dec" title="Decrease font"><img></button>
-            <button class="rv-btn" id="rv-width-widen" title="Widen page"><img></button>
-            <button class="rv-btn" id="rv-width-narrow" title="Narrow page"><img></button>
+            <button class="rv-btn" id="rv-font-inc" title="Increase font">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="1.6"
+              stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true">
+              <path d="M4.5 18.5 9.5 5.5 14.5 18.5"/>
+              <path d="M6.7 14h5.6"/>
+              <path d="M19 9v6"/>
+              <path d="M16 12h6"/>
+            </svg>
+            </svg>
+            </button>
+            <button class="rv-btn" id="rv-font-dec" title="Decrease font">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="1.6"
+              stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true">
+              <path d="M4.5 18.5 9.5 5.5 14.5 18.5"/>
+              <path d="M6.7 14h5.6"/>
+              <path d="M16 12h6"/>
+            </svg>
+            </button>
+            <button class="rv-btn" id="rv-width-widen" title="Widen page">
+            <svg width="24px" height="24px" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+              <g id="Layer_2" data-name="Layer 2">
+                <g id="invisible_box" data-name="invisible box">
+                  <rect width="48" height="48" fill="none"/>
+                </g>
+                <g id="icons_Q2" data-name="icons Q2">
+                  <g>
+                    <path d="M30.6,28.6a1.9,1.9,0,0,0,.2,3,2.1,2.1,0,0,0,2.7-.2l5.9-6a1.9,1.9,0,0,0,0-2.8l-5.9-6a2.1,2.1,0,0,0-2.7-.2,1.9,1.9,0,0,0-.2,3L33.2,22H14.8l2.6-2.6a1.9,1.9,0,0,0-.2-3,2.1,2.1,0,0,0-2.7.2l-5.9,6a1.9,1.9,0,0,0,0,2.8l5.9,6a2.1,2.1,0,0,0,2.7.2,1.9,1.9,0,0,0,.2-3L14.8,26H33.2Z"/>
+                    <path d="M42,10V38a2,2,0,0,0,4,0V10a2,2,0,0,0-4,0Z"/>
+                    <path d="M6,38V10A2,2,0,0,0,2,10V38a2,2,0,0,0,4,0Z"/>
+                  </g>
+                </g>
+              </g>
+            </svg>
+            </button>
+            <button class="rv-btn" id="rv-width-narrow" title="Narrow page">
+            <svg width="24px" height="24px" viewBox="0 0 48 48">
+              <g id="Layer_2" data-name="Layer 2">
+                <g id="invisible_box" data-name="invisible box">
+                  <rect width="48" height="48" fill="none"/>
+                </g>
+                <g id="icons_Q2" data-name="icons Q2">
+                  <g>
+                    <path d="M32.6,22.6a1.9,1.9,0,0,0,0,2.8l5.9,6a2.1,2.1,0,0,0,2.7.2,1.9,1.9,0,0,0,.2-3L38.8,26H44a2,2,0,0,0,0-4H38.8l2.6-2.6a1.9,1.9,0,0,0-.2-3,2.1,2.1,0,0,0-2.7.2Z"/>
+                    <path d="M15.4,25.4a1.9,1.9,0,0,0,0-2.8l-5.9-6a2.1,2.1,0,0,0-2.7-.2,1.9,1.9,0,0,0-.2,3L9.2,22H4a2,2,0,0,0,0,4H9.2L6.6,28.6a1.9,1.9,0,0,0,.2,3,2.1,2.1,0,0,0,2.7-.2Z"/>
+                    <path d="M26,10V38a2,2,0,0,0,4,0V10a2,2,0,0,0-4,0Z"/>
+                    <path d="M22,38V10a2,2,0,0,0-4,0V38a2,2,0,0,0,4,0Z"/>
+                  </g>
+                </g>
+              </g>
+            </svg>
+            </button>
           </div>
         </div>
         <div id="rv-content">
@@ -1148,19 +1253,6 @@
   // TTS Controls
   // --------------------------
   async function setupTTSControls() {
-    // Set icons
-    setIcon("rv-close", "exit.png");
-    setIcon("rv-font-inc", "text_increase.png");
-    setIcon("rv-font-dec", "text_decrease.png");
-    setIcon("rv-width-widen", "widen.png");
-    setIcon("rv-width-narrow", "shrink.png");
-    setIcon("rv-tts-play", "TTS.png");
-    setIcon("rv-tts-stop", "stop.png");
-    setIcon("rv-tts-prev", "prev.png");
-    setIcon("rv-tts-prevp", "pprev.png");
-    setIcon("rv-tts-next", "next.png");
-    setIcon("rv-tts-nextp", "nnext.png");
-
     const speedInp = overlay.querySelector("#rv-speed");
     const speedLabel = overlay.querySelector("#rv-speed-label");
     const btnPrev = overlay.querySelector("#rv-tts-prev");

@@ -17,7 +17,7 @@
   const SERVERS = new Map([
     [Server.MY_KOKORO, {name: 'Kokoro', active: false, speed: 1.0, chunk_size: [35, 150]}],
     [Server.VOX_ANE, {name: 'Vox', active: false, chunk_size: [35, 200]}],
-    [Server.SUPERTONIC, {name: 'SuperT', active: true, speed: 1.2, chunk_size: [80, 350], streamable: false, pause: 500}],
+    [Server.SUPERTONIC, {name: 'SuperT', active: true, speed: 1.2, chunk_size: [80, 350], pause: 500}],
     [Server.POCKET, {name: 'Pocket', active: true, chunk_size: [80, 350], pause: 250}],
     [Server.CANDLE, {name: 'Candle', active: true, chunk_size: [80, 350], pause: 250}],
   ]);

@@ -17,7 +17,7 @@
   const SERVERS = new Map([
     [Server.MY_KOKORO, {name: 'Kokoro', active: false, speed: 1.0, chunk_size: [35, 150]}],
     [Server.VOX_ANE, {name: 'Vox', active: false, chunk_size: [35, 200]}],
-    [Server.SUPERTONIC, {name: 'SuperT', active: true, speed: 1.2, chunk_size: [80, 350], pause: 500}],
+    [Server.SUPERTONIC, {name: 'SuperT', active: true, speed: 1.2, chunk_size: [80, 350], streamable: false, pause: 500}],
     [Server.POCKET, {name: 'Pocket', active: true, chunk_size: [80, 350], pause: 250}],
     [Server.CANDLE, {name: 'Candle', active: true, chunk_size: [80, 350], pause: 250}],
   ]);
@@ -74,6 +74,7 @@
     scrl: null,          // auto scroll checkbox
     meta: [],            // [{el,start,end}] parallel to tts.texts[index]
     highlightSpan: null, // active <span> wrapper for current sentence
+    prefetchAllowed: true,
   };
 
   const LONG_PAGE_THRESHOLD = 150;  // Minimum segments to consider a page "long"
@@ -131,47 +132,102 @@
     synthChain = next.catch(() => {});
     return next;
   }
-  // Fetch + decode a segment through background proxy
-  async function fetchAndDecodeSegment(i, signature) {
 
+  let prefetchTimer = null;
+
+  function startPrefetchSoon(delayMs = 150) {
+    if (prefetchTimer) clearTimeout(prefetchTimer);
+    prefetchTimer = setTimeout(() => {
+      prefetchTimer = null;
+      if (!tts.playing) return;
+      tts.prefetchAllowed = true;
+      prefetchAhead().catch(() => {});
+    }, delayMs);
+  }
+
+  async function prefetchAhead() {
+    if (!tts.prefetchAllowed) return;
+
+    const _sig = sig();
+    const start = Math.max(0, tts.index + 1);
+    const end = Math.min(tts.segments.length - 1, tts.index + tts.prefetchAhead);
+
+    for (let i = start; i <= end; i++) {
+      const k = ttsKey(i);
+      if (!tts.decoded.has(k) && !tts.inFlight.has(k)) {
+        try { await fetchAndDecodeSegment(i, _sig); } catch {}
+      }
+    }
+
+    // keepBehind cleanup
+    for (const k of Array.from(tts.decoded.keys())) {
+      const idx = parseInt(k.split(":")[1], 10);
+      if (Number.isFinite(idx) && idx < tts.index - tts.keepBehind) {
+        tts.decoded.delete(k);
+      }
+    }
+  }
+
+  // Fetch + decode a segment through background proxy
+  async function fetchAndDecodeSegment(i, signature, tokenForStream = null) {
     const k = ttsKey(i);
 
     // 1) Already decoded
     if (tts.decoded.has(k)) return tts.decoded.get(k);
 
-    // 2) Already in flight for this index: reuse its Promise
+    // 2) Already in flight
     if (tts.inFlight.has(k)) return tts.inFlight.get(k);
 
-    // 3) New synth task for this index
     const task = (async () => {
       try {
-        // Only one synth at a time goes through this lock
         setStatus(`T→S ${i + 1} / ${tts.segments.length}`);
-        // TODO: when i === tts.index, stream instead of
-        // fetching and waiting for whole audio
-        const response = await withSynthLock(() =>
-          chrome.runtime.sendMessage({
-            type: "tts.synthesize",
+
+        const payloadBase = {
+          signature,
+          index: i,
+          text: tts.texts[i],
+          lang: _lang,
+          voice: tts.voice,
+          speed: tts.speed,
+          server: tts.server
+        };
+
+        const streamable = SERVERS.get(tts.server).streamable ?? true;
+        const out_of_order = i !== tts.index && !tts.decoded.has(ttsKey(tts.index))
+          && streamable && !tts.inFlight.has(ttsKey(tts.index))
+
+        let response;
+
+        if (i === tts.index) {
+          response = await chrome.runtime.sendMessage({
+            type: streamable ? "tts.stream" : "tts.synthesize",
             payload: {
-              signature,
-              // out of order if prefetching but current index not fetched yet
-              out_of_order: i !== tts.index && !tts.decoded.has(ttsKey(tts.index)),
-              text: tts.texts[i],
-              lang: _lang,
-              voice: tts.voice,
-              speed: tts.speed,
-              server: tts.server
-            }
-          })
-        );
+              ...payloadBase,
+              out_of_order,
+              token: tokenForStream
+            },
+          });
+        } else {
+          // Prefetch path, keep old behavior and lock
+          response = await withSynthLock(() =>
+            chrome.runtime.sendMessage({
+              type: "tts.synthesize",
+              payload: {
+                ...payloadBase,
+                out_of_order,
+              }
+            })
+          );
+        }
 
         if (!response?.ok) throw new Error(response?.error || "Synthesis failed");
-        if (signature !== sig()) throw new Error('Stale signature');
+        if (signature !== sig()) throw new Error("Stale signature");
 
         const buf = base64ToArrayBuffer(response.base64);
         const ab = decodeBuffer(i, buf);
         setStatus();
         return ab;
+
       } finally {
         tts.inFlight.delete(k);
       }
@@ -203,15 +259,38 @@
     const _sig = sig();
 
     highlightCurrent();
+
+    // If current segment not cached, stream it for fast start
+    const curKey = ttsKey(index);
+    const shouldStream = !tts.decoded.has(curKey) && (SERVERS.get(tts.server).streamable ?? true);
+
     try {
-      // Fetch and Wait for this segment's audio
+      if (shouldStream) {
+        // Kick off streaming download + caching (promise stored in inFlight)
+        // Offscreen handles playback and will send streamPlaying and streamEnded
+        fetchAndDecodeSegment(index, _sig, token).catch((err) => {
+          // Only act if still current
+          if (!tts.playing || token !== tts.playToken || _sig !== sig()) return;
+          console.log("Stream caching error:", err);
+          // If streaming failed, fall back to advancing
+          if (index === tts.index) tts.btnNext.click();
+        });
+
+        // Update UI to reflect that playback is starting
+        tts.playing = true;
+        tts.btnPlay.style.display = "none";
+        tts.controls.style.display = "inherit";
+        setStatus(`Streaming ${index + 1} / ${tts.segments.length}`);
+        tts.prefetchAllowed = false;
+
+        return;
+      }
+
+      // If already decoded, use existing local playback path (same as before)
       const cur = await fetchAndDecodeSegment(index, _sig);
-      // If something changed (voice/jump/stop) while we were waiting, bail
-      if (!tts.playing || token != tts.playToken || _sig !== sig()) return;
+      if (!tts.playing || token !== tts.playToken || _sig !== sig()) return;
 
       const ctx = ensureCtx();
-
-      // Resume context if needed (user gesture requirement)
       if (ctx.state === "suspended") {
         await ctx.resume();
       }
@@ -219,7 +298,6 @@
       const src = ctx.createBufferSource();
       tts.currentSrc = src;
 
-      // Attach onended
       src.onended = () => {
         if (!tts.playing || token !== tts.playToken) return;
         tts.currentSrc = null;
@@ -240,7 +318,6 @@
         }
       };
 
-      // Start playback of this segment
       src.buffer = cur;
       src.connect(ctx.destination);
       tts.playing = true;
@@ -252,30 +329,12 @@
         payload: { index }
       });
 
-      // Prefetch without blocking the onended attachment/playback
-      (async () => {
-        const start = Math.max(0, tts.index + 1);
-        const end = Math.min(tts.segments.length - 1, tts.index + tts.prefetchAhead);
-        for (let i = start; i <= end; i++) {
-          const k = ttsKey(i);
-          if (!tts.decoded.has(k) && !tts.inFlight.has(k)) {
-            try { await fetchAndDecodeSegment(i, _sig); } catch {}
-          }
-        }
-        // Cleanup only far-behind buffers
-        for (const k of Array.from(tts.decoded.keys())) {
-          const idx = parseInt(k.split(":")[1], 10);
-          if (Number.isFinite(idx) && idx < tts.index - tts.keepBehind) {
-            tts.decoded.delete(k);
-          }
-        }
-      })().catch(() => {});
-
+      tts.prefetchAllowed = true;
+      prefetchAhead().catch(() => {});
     } catch (err) {
       setStatus();
       console.log("Playback error:", err);
-      // advance only if index is current
-      if (index == tts.index) tts.btnNext.click();
+      if (index === tts.index) tts.btnNext.click();
     }
   }
 
@@ -287,11 +346,21 @@
         tts.currentSrc.close();
       }
     } catch {}
+    chrome.runtime.sendMessage({
+      type: "tts.streamCancel",
+      payload: {
+        signature: sig(),
+        token: tts.playToken,
+        index: tts.index
+      }
+    });
     tts.currentSrc = null;
     tts.playing = false;
     tts.btnPlay.style.display = 'inherit';
     tts.controls.style.display = 'none';
     tts.inFlight.clear();
+    tts.prefetchAllowed = false;
+    if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null; }
     // doesn't hurt to send cancel to server
     if (tts.server == Server.VOX_ANE)
     try { chrome.runtime.sendMessage({
@@ -346,7 +415,53 @@
   // --------------------------
   try {
     chrome.runtime.onMessage.addListener((msg) => {
-      if (msg && msg.type === "toggleReader") toggle();
+      if (!msg || !msg.type) return;
+
+      if (msg.type === "toggleReader") {
+        toggle();
+        return;
+      }
+
+      if (msg.type === "tts.streamPlaying") {
+        const p = msg.payload || {};
+        if (!tts.playing) return;
+        if (p.signature !== sig()) return;
+        if (p.token !== tts.playToken) return;
+        if (p.index !== tts.index) return;
+        setStatus(); // show Playing x/y
+        highlightReading();
+        // chrome.runtime.sendMessage({
+        //   type: "tts.positionChanged",
+        //   payload: { index: tts.index }
+        // });
+        startPrefetchSoon(150);
+        return;
+      }
+
+      if (msg.type === "tts.streamEnded") {
+        const p = msg.payload || {};
+        if (!tts.playing) return;
+        if (p.signature !== sig()) return;
+        if (p.token !== tts.playToken) return;
+        if (p.index !== tts.index) return;
+
+        const next = tts.index + 1;
+        if (next < tts.segments.length) {
+          let pause = SERVERS.get(tts.server).pause || 0;
+          if (pause > 0) {
+            pause += (Math.random() * pause * 0.2);
+            setTimeout(() => { scheduleAt(next); }, Math.floor(pause));
+          } else {
+            scheduleAt(next);
+          }
+        } else {
+          stopPlayback();
+          tts.index = 0;
+          setStatus("Finished");
+          chrome.runtime.sendMessage({ type: "tts.stateChanged", payload: "stopped" });
+        }
+        return;
+      }
     });
   } catch {}
 

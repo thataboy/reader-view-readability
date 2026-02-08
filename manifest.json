@@ -6,7 +6,9 @@
   "permissions": [
     "activeTab",
     "scripting",
-    "storage"
+    "storage",
+    "offscreen",
+    "tabs"
   ],
   "action": {
     "default_title": "Readability",

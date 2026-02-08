@@ -16,6 +16,83 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   if (command === "toggle-reader" && tab && tab.id) injectAndToggle(tab.id);
 });
 
+const OFFSCREEN_URL = "offscreen.html";
+let offscreenCreating = null;
+
+// streamId -> { tabId, sendResponse, responded, ended }
+const streamPending = new Map();
+// tabId -> Set(streamId)
+const tabStreams = new Map();
+
+async function ensureOffscreenDocument() {
+  // If already exists, this resolves quickly
+  try {
+    // Chrome does not expose a direct "exists" check in stable across all versions.
+    // The common approach is try create, catch "already exists" or track locally.
+    if (offscreenCreating) return offscreenCreating;
+
+    offscreenCreating = chrome.offscreen.createDocument({
+      url: OFFSCREEN_URL,
+      reasons: [chrome.offscreen.Reason.AUDIO_PLAYBACK],
+      justification: "Stream TTS audio using WebAudio in an offscreen document."
+    });
+
+    await offscreenCreating;
+  } catch (e) {
+    // If it already exists, ignore
+    // Some Chrome versions throw an error string that includes "Only a single offscreen document may be created."
+    // We treat that as ok.
+    const msg = String(e && (e.message || e));
+    if (!msg.toLowerCase().includes("offscreen") && !msg.toLowerCase().includes("single")) {
+      console.error("ensureOffscreenDocument failed:", e);
+      throw e;
+    }
+  } finally {
+    offscreenCreating = null;
+  }
+}
+
+function makeStreamId(tabId, signature, token, index) {
+  // Keep it deterministic and unique per request
+  return `${tabId}>${signature}>${token}>${index}>${Math.random().toString(16).slice(2)}`;
+}
+
+function rememberStream(tabId, streamId, sendResponse) {
+  streamPending.set(streamId, { tabId, sendResponse, responded: false, ended: false });
+  if (!tabStreams.has(tabId)) tabStreams.set(tabId, new Set());
+  tabStreams.get(tabId).add(streamId);
+}
+
+function respondStream(streamId, payload) {
+  const rec = streamPending.get(streamId);
+  if (!rec || rec.responded) return;
+  rec.responded = true;
+  try { rec.sendResponse(payload); } catch {}
+}
+
+function endStream(streamId) {
+  const rec = streamPending.get(streamId);
+  if (!rec) return;
+  rec.ended = true;
+
+  // If we never responded (e.g., ended happened before audio ready), respond with an error
+  if (!rec.responded) {
+    try { rec.sendResponse({ ok: false, error: "Stream ended before audio was ready" }); } catch {}
+    rec.responded = true;
+  }
+
+  streamPending.delete(streamId);
+  const set = tabStreams.get(rec.tabId);
+  if (set) {
+    set.delete(streamId);
+    if (set.size === 0) tabStreams.delete(rec.tabId);
+  }
+}
+
+function forwardToTab(tabId, msg) {
+  try { chrome.tabs.sendMessage(tabId, msg); } catch {}
+}
+
 const Server = Object.freeze({
     MY_KOKORO: 1,
     VOX_ANE: 2,
@@ -229,6 +306,164 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return; // no async work to keep alive
   }
 
+ if (msg.type === "offscreen.tts.streamPlaying") {
+    const { streamId, index, signature, token } = msg.payload || {};
+    const rec = streamPending.get(streamId);
+    if (rec) {
+      forwardToTab(rec.tabId, {
+        type: "tts.streamPlaying",
+        payload: { index, signature, token }
+      });
+    }
+    return;
+  }
+
+  if (msg.type === "offscreen.tts.streamEnded") {
+
+    const { streamId, index, signature, token } = msg.payload || {};
+    const rec = streamPending.get(streamId);
+    if (rec) {
+      forwardToTab(rec.tabId, {
+        type: "tts.streamEnded",
+        payload: { index, signature, token }
+      });
+    }
+    endStream(streamId);
+    return;
+  }
+
+  if (msg.type === "offscreen.tts.streamAudioReady") {
+    // Offscreen finished downloading full WAV and is returning it for caching.
+    const { streamId, base64 } = msg.payload || {};
+    respondStream(streamId,
+      base64 ? { ok: true, base64 }: { ok: false, error: "Missing audio payload" }
+    );
+    return;
+  }
+
+  if (msg.type === "offscreen.tts.streamError") {
+    const { streamId, error } = msg.payload || {};
+    respondStream(streamId, { ok: false, error: error || "Stream failed" });
+    endStream(streamId);
+    return;
+  }
+
+  if (msg.type === "offscreen.tts.streamCancelled") {
+    const { streamId } = msg.payload || {};
+    respondStream(streamId, { ok:false, error:"Cancelled" });
+    endStream(streamId);
+    return;
+  }
+
+  if (msg.type === "tts.stream") {
+    (async () => {
+      const tabId = sender?.tab?.id;
+      if (!tabId) {
+        sendResponse({ ok: false, error: "No sender tab for stream request" });
+        return;
+      }
+
+      const p = msg.payload || {};
+      const { signature, token, index, text, lang, voice, speed, server } = p;
+
+      try {
+        await ensureOffscreenDocument();
+
+        const serverCfg = SERVERS.get(server);
+        if (!serverCfg) throw new Error("Unknown server");
+
+        const streamId = makeStreamId(tabId, signature, token, index);
+        rememberStream(tabId, streamId, sendResponse);
+
+        // Forward to offscreen for actual streaming playback + download
+        await chrome.runtime.sendMessage({
+          type: "offscreen.tts.stream",
+          payload: {
+            streamId,
+            endpoint: `http://${SERVER_IP}:${serverCfg.port}/stream`,
+            // payload is unchanged, same as synth route
+            body: {
+              input: text,
+              voice,
+              speed,
+              lang,
+              ...(serverCfg.extra_params || {})
+            },
+            signature,
+            token,
+            index
+          }
+        });
+
+        // Do not sendResponse here.
+        // We return true below and respond later when offscreen delivers full WAV.
+
+      } catch (e) {
+        console.error("tts.stream error:", e);
+        sendResponse({ ok: false, error: String(e && (e.message || e)) });
+      }
+    })();
+
+    return true; // keep sendResponse alive
+  }
+
+  if (msg.type === "tts.streamCancel") {
+    const senderTabId = sender?.tab?.id;
+    const { signature, token, index } = msg.payload || {};
+
+    if (!senderTabId) {
+      sendResponse?.({ ok: false, error: "No sender tab" });
+      return;
+    }
+
+    const streamSet = tabStreams.get(senderTabId);
+    if (!streamSet || streamSet.size === 0) {
+      sendResponse?.({ ok: true }); // nothing to cancel
+      return;
+    }
+
+    for (const streamId of Array.from(streamSet)) {
+      const rec = streamPending.get(streamId);
+      if (!rec) continue;
+
+      // streamId format: tabId|signature|token|index|...
+      // we only need to match what caller gave us
+      const parts = streamId.split(">");
+      const sidTab   = parts[0];
+      const sidSig   = parts[1];
+      const sidToken = parts[2];
+      const sidIndex = parts[3];
+
+      const matches =
+        String(sidTab) === String(senderTabId) &&
+        (signature == null || String(signature) === String(sidSig)) &&
+        (token == null || String(token) === String(sidToken)) &&
+        (index == null || String(index) === String(sidIndex));
+
+      if (!matches) continue;
+
+      // 1) Tell offscreen to stop audio immediately
+      try {
+        chrome.runtime.sendMessage({
+          type: "offscreen.tts.cancel",
+          payload: { streamId }
+        });
+      } catch {}
+
+      // 2) Resolve any awaiting tts.stream() promise
+      respondStream(streamId, {
+        ok: false,
+        error: "Cancelled"
+      });
+
+      // 3) Final cleanup (routing + bookkeeping)
+      endStream(streamId);
+    }
+
+    sendResponse?.({ ok: true });
+    return;
+  }
+
   // Wrap async logic so we can return true below
   (async () => {
     try {
@@ -239,7 +474,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
 
-      if (msg.type === "tts.synthesize" {
+      if (msg.type === "tts.synthesize") {
         const { signature, out_of_order, text, lang, voice, speed, server } = msg.payload || {};
         if (signature !== `${server}|${voice}|${speed}`) {
           sendResponse({ error: `mismatched ${signature}`});

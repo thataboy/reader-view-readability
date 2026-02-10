@@ -7,42 +7,80 @@
   // Server definitions
   // --------------------------
   const Server = Object.freeze({
-      MY_KOKORO: 1,
-      VOX_ANE: 2,
-      SUPERTONIC: 3,
-      POCKET: 4,
-      CANDLE: 5,
+    MY_KOKORO: 1,
+    VOX_ANE: 2,
+    SUPERTONIC: 3,
+    POCKET: 4,
+    CANDLE: 5,
   });
 
   const SERVERS = new Map([
-    [Server.MY_KOKORO, {name: 'Kokoro', active: false, speed: 1.0, chunk_size: [35, 150]}],
-    [Server.VOX_ANE, {name: 'Vox', active: false, chunk_size: [35, 200]}],
-    [Server.SUPERTONIC, {name: 'SuperT', active: true, speed: 1.2, chunk_size: [80, 350], pause: 500}],
-    [Server.POCKET, {name: 'Pocket', active: true, chunk_size: [80, 350], pause: 250}],
-    [Server.CANDLE, {name: 'Candle', active: true, chunk_size: [80, 350], pause: 250}],
+    [
+      Server.MY_KOKORO,
+      { name: "Kokoro", active: false, speed: 1.0, chunk_size: [35, 80] },
+    ],
+    [Server.VOX_ANE, { name: "Vox", active: false, chunk_size: [35, 80] }],
+    [
+      Server.SUPERTONIC,
+      {
+        name: "SuperT",
+        active: true,
+        speed: 1.2,
+        chunk_size: [80, 350],
+        pause: 0,
+      },
+    ],
+    [
+      Server.POCKET,
+      { name: "Pocket", active: true, chunk_size: [80, 350], pause: 0 },
+    ],
+    [
+      Server.CANDLE,
+      { name: "Candle", active: true, chunk_size: [80, 350], pause: 0 },
+    ],
   ]);
 
-  let prefs;        // saved preferences
-  let overlay;      // reader view overlay
-  let contentHost;  // div where main content resides
+  let prefs; // saved preferences
+  let overlay; // reader view overlay
+  let contentHost; // div where main content resides
 
   // --------------------------
   // Storage helpers
   // --------------------------
   const STORAGE_KEY = "rv_prefs_v1";
-  const defaults = { fontSize: 17, maxWidth: 860, server: Server.SUPERTONIC, voice: {}, speeds: {}, ratings: {}, readingProgress: {}, autoScroll: true };
+  const defaults = {
+    fontSize: 17,
+    maxWidth: 860,
+    server: Server.SUPERTONIC,
+    voice: {},
+    speeds: {},
+    ratings: {},
+    readingProgress: {},
+    autoScroll: true,
+  };
   async function loadPrefs() {
     try {
       const out = await chrome.storage.local.get(STORAGE_KEY);
       return { ...defaults, ...(out[STORAGE_KEY] || {}) };
     } catch {
-      try { return { ...defaults, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") }; }
-      catch { return { ...defaults }; }
+      try {
+        return {
+          ...defaults,
+          ...JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"),
+        };
+      } catch {
+        return { ...defaults };
+      }
     }
   }
   async function savePrefs() {
-    try { await chrome.storage.local.set({ [STORAGE_KEY]: prefs }); }
-    catch { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs)); } catch {} }
+    try {
+      await chrome.storage.local.set({ [STORAGE_KEY]: prefs });
+    } catch {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+      } catch {}
+    }
   }
 
   // --------------------------
@@ -51,204 +89,58 @@
   const tts = {
     prepared: false,
     server: Server.SUPERTONIC,
-    voice: '',
+    voice: "",
     speed: 1.0,
     audioCtx: null,
     segments: [],
     texts: [],
     index: 0,
     playing: false,
-    decoded: new Map(),
-    inFlight: new Map(),
-    currentSrc: null,
     playToken: 0,
-    prefetchAhead: 4,    // # TTS segments to prefetch
+    prefetchAhead: 4, // # TTS segments to prefetch
     keepBehind: 3,
-    statusEl: null,      // status label
-    voiceEl: null,       // voice list control
+    statusEl: null, // status label
+    voiceEl: null, // voice list control
     btnPlay: null,
     btnStop: null,
     btnNext: null,
-    rating: null,        // star rating control
-    controls: null,      // button group not including Play
-    scrl: null,          // auto scroll checkbox
-    meta: [],            // [{el,start,end}] parallel to tts.texts[index]
+    rating: null, // star rating control
+    controls: null, // button group not including Play
+    scrl: null, // auto scroll checkbox
+    meta: [], // [{el,start,end}] parallel to tts.texts[index]
     highlightSpan: null, // active <span> wrapper for current sentence
-    prefetchAllowed: true,
   };
 
-  const LONG_PAGE_THRESHOLD = 150;  // Minimum segments to consider a page "long"
-  const MAX_SAVED_PAGES = 100       // Max number of saved reading positions
+  const LONG_PAGE_THRESHOLD = 150; // Minimum segments to consider a page "long"
+  const MAX_SAVED_PAGES = 100; // Max number of saved reading positions
   const currentPageUrl = window.location.href.split(/[?#]/)[0]; // Use URL without query/hash
-  const _lang = (document.documentElement.lang || 'en').substring(0, 2).toLowerCase();
+  const _lang = (document.documentElement.lang || "en")
+    .substring(0, 2)
+    .toLowerCase();
 
-  function sig(){ return `${tts.server}|${tts.voice}|${tts.speed}`; }
-  function ttsKey(i){ return `${sig()}:${i}`; }
-  function ensureCtx() {
-    if (!tts.audioCtx || tts.audioCtx.state === "closed") {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      // 'playback' hint encourages the OS to use the high-quality media path
-      // instead of the lower-quality 'communication' path.
-      tts.audioCtx = new AudioCtx({ latencyHint: "playback" });
-    }
-    return tts.audioCtx;
+  function sig() {
+    return `${tts.server}|${tts.voice}|${tts.speed}`;
   }
 
   // Show status message to user
   // set msg to '' or omit to show playing status
-  function setStatus(msg = '') {
-    if (msg==='') {
-      msg = `${tts.playing ? 'Playing' : 'Ready'} ${tts.index + 1} / ${tts.segments.length}`;
+  function setStatus(msg = "") {
+    if (msg === "") {
+      msg = `${tts.playing ? "Playing" : "Ready"} ${tts.index + 1} / ${tts.segments.length}`;
     }
     tts.statusEl.textContent = msg;
   }
 
-  function base64ToArrayBuffer(base64) {
-    const binaryString = atob(base64);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    // Return the underlying ArrayBuffer
-    return bytes.buffer;
-  }
-
-  // Decode ArrayBuffer to AudioBuffer
-  function decodeBuffer(i, arrayBuffer) {
-    const k = ttsKey(i);
-    if (tts.decoded.has(k)) return tts.decoded.get(k);
-    const ctx = ensureCtx();
-    const ab = ctx.decodeAudioData(arrayBuffer.slice(0));
-    tts.decoded.set(k, ab);
-    return ab;
-  }
-
-  // Ensure only one remote synthesis runs at a time across segments
-  let synthChain = Promise.resolve();
-  function withSynthLock(fn) {
-    const next = synthChain.then(fn);
-    // keep the chain alive even if a task throws
-    synthChain = next.catch(() => {});
-    return next;
-  }
-
-  let prefetchTimer = null;
-
-  function startPrefetchSoon(delayMs = 150) {
-    if (prefetchTimer) clearTimeout(prefetchTimer);
-    prefetchTimer = setTimeout(() => {
-      prefetchTimer = null;
-      if (!tts.playing) return;
-      tts.prefetchAllowed = true;
-      prefetchAhead().catch(() => {});
-    }, delayMs);
-  }
-
-  async function prefetchAhead() {
-    if (!tts.prefetchAllowed) return;
-
-    const _sig = sig();
-    const start = Math.max(0, tts.index + 1);
-    const end = Math.min(tts.segments.length - 1, tts.index + tts.prefetchAhead);
-
-    for (let i = start; i <= end; i++) {
-      const k = ttsKey(i);
-      if (!tts.decoded.has(k) && !tts.inFlight.has(k)) {
-        try { await fetchAndDecodeSegment(i, _sig); } catch {}
-      }
-    }
-
-    // keepBehind cleanup
-    for (const k of Array.from(tts.decoded.keys())) {
-      const idx = parseInt(k.split(":")[1], 10);
-      if (Number.isFinite(idx) && idx < tts.index - tts.keepBehind) {
-        tts.decoded.delete(k);
-      }
-    }
-  }
-
-  // Fetch + decode a segment through background proxy
-  async function fetchAndDecodeSegment(i, signature, tokenForStream = null) {
-    const k = ttsKey(i);
-
-    // 1) Already decoded
-    if (tts.decoded.has(k)) return tts.decoded.get(k);
-
-    // 2) Already in flight
-    if (tts.inFlight.has(k)) return tts.inFlight.get(k);
-
-    const task = (async () => {
-      try {
-        setStatus(`T→S ${i + 1} / ${tts.segments.length}`);
-
-        const payloadBase = {
-          signature,
-          index: i,
-          text: tts.texts[i],
-          lang: _lang,
-          voice: tts.voice,
-          speed: tts.speed,
-          server: tts.server
-        };
-
-        const streamable = SERVERS.get(tts.server).streamable ?? true;
-        const out_of_order = i !== tts.index && !tts.decoded.has(ttsKey(tts.index))
-          && streamable && !tts.inFlight.has(ttsKey(tts.index))
-
-        let response;
-
-        if (i === tts.index) {
-          response = await chrome.runtime.sendMessage({
-            type: streamable ? "tts.stream" : "tts.synthesize",
-            payload: {
-              ...payloadBase,
-              out_of_order,
-              token: tokenForStream
-            },
-          });
-        } else {
-          // Prefetch path, keep old behavior and lock
-          response = await withSynthLock(() =>
-            chrome.runtime.sendMessage({
-              type: "tts.synthesize",
-              payload: {
-                ...payloadBase,
-                out_of_order,
-              }
-            })
-          );
-        }
-
-        if (!response?.ok) throw new Error(response?.error || "Synthesis failed");
-        if (signature !== sig()) throw new Error("Stale signature");
-
-        const buf = base64ToArrayBuffer(response.base64);
-        const ab = decodeBuffer(i, buf);
-        setStatus();
-        return ab;
-
-      } finally {
-        tts.inFlight.delete(k);
-      }
-    })();
-
-    tts.inFlight.set(k, task);
-    return task;
-  }
-
-  function playAt(idx, moveOnly=false) {
+  function playAt(idx, moveOnly = false) {
     if (idx < 0 || idx >= tts.segments.length) return;
     tts.index = idx;
     if (moveOnly || !tts.server) {
-      highlightCurrent(); saveReadingProgress();
+      highlightCurrent();
+      saveReadingProgress();
       return;
     }
     stopPlayback();
     highlightCurrent();
-    tts.playing = true;
-    tts.btnPlay.style.display = 'none';
-    tts.controls.style.display = 'inherit';
     scheduleAt(idx);
   }
 
@@ -260,77 +152,40 @@
 
     highlightCurrent();
 
-    // If current segment not cached, stream it for fast start
-    const curKey = ttsKey(index);
-    const shouldStream = !tts.decoded.has(curKey) && (SERVERS.get(tts.server).streamable ?? true);
-
     try {
-      if (shouldStream) {
-        // Kick off streaming download + caching (promise stored in inFlight)
-        // Offscreen handles playback and will send streamPlaying and streamEnded
-        fetchAndDecodeSegment(index, _sig, token).catch((err) => {
-          // Only act if still current
-          if (!tts.playing || token !== tts.playToken || _sig !== sig()) return;
-          console.log("Stream caching error:", err);
-          // If streaming failed, fall back to advancing
-          if (index === tts.index) tts.btnNext.click();
-        });
-
-        // Update UI to reflect that playback is starting
-        tts.playing = true;
-        tts.btnPlay.style.display = "none";
-        tts.controls.style.display = "inherit";
-        setStatus(`Streaming ${index + 1} / ${tts.segments.length}`);
-        tts.prefetchAllowed = false;
-
-        return;
-      }
-
-      // If already decoded, use existing local playback path (same as before)
-      const cur = await fetchAndDecodeSegment(index, _sig);
-      if (!tts.playing || token !== tts.playToken || _sig !== sig()) return;
-
-      const ctx = ensureCtx();
-      if (ctx.state === "suspended") {
-        await ctx.resume();
-      }
-
-      const src = ctx.createBufferSource();
-      tts.currentSrc = src;
-
-      src.onended = () => {
-        if (!tts.playing || token !== tts.playToken) return;
-        tts.currentSrc = null;
-        const next = tts.index + 1;
-        if (next < tts.segments.length) {
-          let pause = SERVERS.get(tts.server).pause || 0;
-          if (pause > 0) {
-            pause += (Math.random() * pause * 0.2);
-            setTimeout(() => { scheduleAt(next); }, Math.floor(pause));
-          } else {
-            scheduleAt(next);
-          }
-        } else {
-          stopPlayback();
-          tts.index = 0;
-          setStatus("Finished");
-          chrome.runtime.sendMessage({ type: "tts.stateChanged", payload: "stopped" });
-        }
-      };
-
-      src.buffer = cur;
-      src.connect(ctx.destination);
+      // Content is intentionally dumb:
+      // it sends the desired window [index..index+prefetchAhead] and offscreen decides
+      // what to stream/play/prefetch and how to serialize requests.
       tts.playing = true;
-      src.start();
-      setStatus();
-      highlightReading();
-      chrome.runtime.sendMessage({
-        type: "tts.positionChanged",
-        payload: { index }
+      tts.btnPlay.style.display = "none";
+      tts.controls.style.display = "inherit";
+      setStatus(`Streaming ${index + 1} / ${tts.segments.length}`);
+
+      const endIndex = Math.min(
+        tts.segments.length - 1,
+        index + tts.prefetchAhead,
+      );
+      const segments = [];
+      for (let i = index; i <= endIndex; i++) {
+        segments.push({ index: i, text: tts.texts[i] });
+      }
+
+      await chrome.runtime.sendMessage({
+        type: "tts.window",
+        payload: {
+          signature: _sig,
+          token,
+          server: tts.server,
+          voice: tts.voice,
+          speed: tts.speed,
+          lang: _lang,
+          startIndex: index,
+          endIndex,
+          segments,
+        },
       });
 
-      tts.prefetchAllowed = true;
-      prefetchAhead().catch(() => {});
+      return;
     } catch (err) {
       setStatus();
       console.log("Playback error:", err);
@@ -338,44 +193,32 @@
     }
   }
 
-  function stopPlayback() {
-    try {
-      if (tts.currentSrc) {
-        tts.currentSrc.onended = null;
-        tts.currentSrc.stop();
-        tts.currentSrc.close();
-      }
-    } catch {}
-    chrome.runtime.sendMessage({
-      type: "tts.streamCancel",
-      payload: {
-        signature: sig(),
-        token: tts.playToken,
-        index: tts.index
-      }
-    });
-    tts.currentSrc = null;
+  function stopPlayback(notifyBackground=true) {
+    if (notifyBackground)
+      try {
+        chrome.runtime.sendMessage({ type: "tts.stop", payload: {}, });
+      } catch {}
+
     tts.playing = false;
-    tts.btnPlay.style.display = 'inherit';
-    tts.controls.style.display = 'none';
-    tts.inFlight.clear();
-    tts.prefetchAllowed = false;
-    if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null; }
-    // doesn't hurt to send cancel to server
-    if (tts.server == Server.VOX_ANE)
-    try { chrome.runtime.sendMessage({
-      type: "tts.cancel",
-      payload: { server: tts.server }
-    }) } catch {}
+    tts.btnPlay.style.display = "inherit";
+    tts.controls.style.display = "none";
+
     highlightReading();
     setStatus();
   }
 
-  function invalidateAudio(continuePlay=false) {
+  function invalidateAudio(continuePlay=true) {
     const wasPlaying = tts.playing;
+
     stopPlayback();
-    tts.decoded.clear();
-    if (wasPlaying && continuePlay) playAt(tts.index);
+
+    // Clear offscreen cache for this tab when signature changes.
+    try {
+      chrome.runtime.sendMessage({ type: "tts.cleanup", payload: {} });
+    } catch {}
+
+    if (wasPlaying && continuePlay)
+      setTimeout(() => { playAt(tts.index); }, 500);
   }
 
   // Saves the current TTS reading progress (index) to storage.
@@ -389,20 +232,23 @@
 
     if (!prefs.readingProgress) prefs.readingProgress = {};
 
-    if (tts.index == 0 || tts.index + 1 >= tts.segments.length )
+    if (tts.index == 0 || tts.index + 1 >= tts.segments.length)
       delete prefs.readingProgress[currentPageUrl];
-    else prefs.readingProgress[currentPageUrl] = {
-      index: tts.index,
-      segments: tts.segments.length,
-      timestamp: Date.now()
-    };
+    else
+      prefs.readingProgress[currentPageUrl] = {
+        index: tts.index,
+        segments: tts.segments.length,
+        timestamp: Date.now(),
+      };
 
     // Prune the oldest entries
     const urls = Object.keys(prefs.readingProgress);
     const n = urls.length - MAX_SAVED_PAGES;
     if (n > 0) {
-      urls.sort((a, b) =>
-        prefs.readingProgress[a].timestamp - prefs.readingProgress[b].timestamp
+      urls.sort(
+        (a, b) =>
+          prefs.readingProgress[a].timestamp -
+          prefs.readingProgress[b].timestamp,
       );
       for (let i = 0; i < n; i++) delete prefs.readingProgress[urls[i]];
     }
@@ -422,7 +268,7 @@
         return;
       }
 
-      if (msg.type === "tts.streamPlaying") {
+      if (msg.type === "tts.playing") {
         const p = msg.payload || {};
         if (!tts.playing) return;
         if (p.signature !== sig()) return;
@@ -434,23 +280,27 @@
         //   type: "tts.positionChanged",
         //   payload: { index: tts.index }
         // });
-        startPrefetchSoon(150);
         return;
       }
 
-      if (msg.type === "tts.streamEnded") {
+      if (msg.type === "tts.ended") {
         const p = msg.payload || {};
         if (!tts.playing) return;
         if (p.signature !== sig()) return;
         if (p.token !== tts.playToken) return;
         if (p.index !== tts.index) return;
-
+        if (p.reason && p.reason !== "natural") {
+          stopPlayback(notifyBackground=false);
+          return;
+       }
         const next = tts.index + 1;
         if (next < tts.segments.length) {
           let pause = SERVERS.get(tts.server).pause || 0;
           if (pause > 0) {
-            pause += (Math.random() * pause * 0.2);
-            setTimeout(() => { scheduleAt(next); }, Math.floor(pause));
+            pause += Math.random() * pause * 0.2;
+            setTimeout(() => {
+              scheduleAt(next);
+            }, Math.ceil(pause));
           } else {
             scheduleAt(next);
           }
@@ -458,8 +308,23 @@
           stopPlayback();
           tts.index = 0;
           setStatus("Finished");
-          chrome.runtime.sendMessage({ type: "tts.stateChanged", payload: "stopped" });
+          chrome.runtime.sendMessage({
+            type: "tts.stateChanged",
+            payload: "stopped",
+          });
         }
+        return;
+      }
+      if (msg.type === "tts.error") {
+        const p = msg.payload || {};
+        if (!tts.playing) return;
+        if (p.signature !== sig()) return;
+        if (p.token !== tts.playToken) return;
+        if (p.index !== tts.index) return;
+
+        console.log("TTS error:", p.error || p);
+        setStatus();
+        stopPlayback();
         return;
       }
     });
@@ -470,16 +335,20 @@
     if (!target) return;
 
     // Case 1: our normal wrapper span
-    if (target.nodeType === Node.ELEMENT_NODE &&
-        target.tagName === "SPAN" &&
-        target.classList.contains("rv-tts-highlight") &&
-        target.parentNode) {
+    if (
+      target.nodeType === Node.ELEMENT_NODE &&
+      target.tagName === "SPAN" &&
+      target.classList.contains("rv-tts-highlight") &&
+      target.parentNode
+    ) {
       const parent = target.parentNode;
       while (target.firstChild) parent.insertBefore(target.firstChild, target);
       parent.removeChild(target);
-    } else if (target.nodeType === Node.ELEMENT_NODE &&
-               target.classList &&
-               target.classList.contains("rv-tts-highlight")) {
+    } else if (
+      target.nodeType === Node.ELEMENT_NODE &&
+      target.classList &&
+      target.classList.contains("rv-tts-highlight")
+    ) {
       // Case 2: fallback where we just added a class to an existing element
       target.classList.remove("rv-tts-highlight");
       target.classList.remove("rv-tts-reading");
@@ -491,23 +360,42 @@
 
   function rangeFromOffsets(el, start, end) {
     const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
-    let cur = 0, startNode=null, startOff=0, endNode=null, endOff=0, n;
-    while (n = tw.nextNode()) {
-      if (n.parentElement?.closest('sup') || n.parentElement?.closest('label')) continue;
-      const len = n.nodeValue.length, next = cur + len;
-      if (startNode == null && start >= cur && start <= next) { startNode = n; startOff = start - cur; }
-      if (endNode == null && end >= cur && end <= next) { endNode = n; endOff = end - cur; }
+    let cur = 0,
+      startNode = null,
+      startOff = 0,
+      endNode = null,
+      endOff = 0,
+      n;
+    while ((n = tw.nextNode())) {
+      if (n.parentElement?.closest("sup") || n.parentElement?.closest("label"))
+        continue;
+      const len = n.nodeValue.length,
+        next = cur + len;
+      if (startNode == null && start >= cur && start <= next) {
+        startNode = n;
+        startOff = start - cur;
+      }
+      if (endNode == null && end >= cur && end <= next) {
+        endNode = n;
+        endOff = end - cur;
+      }
       cur = next;
       if (startNode && endNode) break;
     }
     const r = document.createRange();
-    if (!startNode || !endNode) { r.selectNodeContents(el); return r; }
-    r.setStart(startNode, Math.max(0, Math.min(startOff, startNode.nodeValue.length)));
+    if (!startNode || !endNode) {
+      r.selectNodeContents(el);
+      return r;
+    }
+    r.setStart(
+      startNode,
+      Math.max(0, Math.min(startOff, startNode.nodeValue.length)),
+    );
     r.setEnd(endNode, Math.max(0, Math.min(endOff, endNode.nodeValue.length)));
     return r;
   }
 
-  function highlightCurrent(index=tts.index) {
+  function highlightCurrent(index = tts.index) {
     clearHighlight();
     const m = tts.meta && tts.meta[index];
     if (!m) return;
@@ -523,13 +411,15 @@
       r.insertNode(span);
       tts.highlightSpan = span;
       if (!tts.playing) span.classList.add("rv-tts-inactive");
-      if (tts.scrl.checked) span.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (tts.scrl.checked)
+        span.scrollIntoView({ block: "center", behavior: "smooth" });
     } catch (e) {
       // Fallback: just highlight the whole paragraph/element
       m.el.classList.add("rv-tts-highlight");
       if (!tts.playing) span.classList.add("rv-tts-inactive");
       tts.highlightSpan = m.el;
-      if (tts.scrl.checked) m.el.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (tts.scrl.checked)
+        m.el.scrollIntoView({ block: "center", behavior: "smooth" });
     }
   }
 
@@ -568,9 +458,11 @@
 
     // Sum lengths of text nodes up to the caret
     const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
-    let cur = 0, n;
-    while (n = tw.nextNode()) {
-      if (n.parentElement?.closest('sup') || n.parentElement?.closest('label')) continue;
+    let cur = 0,
+      n;
+    while ((n = tw.nextNode())) {
+      if (n.parentElement?.closest("sup") || n.parentElement?.closest("label"))
+        continue;
       if (n === r.startContainer) {
         return cur + Math.min(r.startOffset, n.nodeValue.length);
       }
@@ -743,7 +635,10 @@
 
     // Apply saved prefs
     surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
-    contentHost.style.setProperty("--rv-font-family", 'Verdana,Geneva,Helvetica,sans-serif');
+    contentHost.style.setProperty(
+      "--rv-font-family",
+      "Verdana,Geneva,Helvetica,sans-serif",
+    );
     contentHost.style.setProperty("--rv-maxw", `${prefs.maxWidth}px`);
     if (prefs.server && SERVERS.has(prefs.server)) tts.server = prefs.server;
 
@@ -763,22 +658,24 @@
     async function cleanup() {
       await saveReadingProgress();
       stopPlayback();
+      try {
+        chrome.runtime.sendMessage({ type: "tts.cleanup", payload: {} });
+      } catch {}
       overlay.remove();
       document.removeEventListener("keyup", onKey, true);
       document.removeEventListener("copy", onCopy, true);
       // outside.forEach(n => { try { n.removeAttribute("inert"); } catch(_){} });
       document.documentElement.classList.remove("rv-active");
       if (tts.audioCtx) {
-        try { tts.audioCtx.close(); } catch {}
+        try {
+          tts.audioCtx.close();
+        } catch {}
       }
       tts.audioCtx = null;
       tts.prepared = false;
       tts.segments = [];
       tts.texts = [];
       tts.index = 0;
-      tts.decoded.clear();
-      tts.inFlight.clear();
-      tts.currentSrc = null;
       tts.meta = [];
       tts.highlightSpan = null;
     }
@@ -793,13 +690,18 @@
     }
 
     function onKey(e) {
-      const accel = (e.metaKey || e.ctrlKey);
-      if (accel && e.key.toLowerCase() === "a") { e.preventDefault(); selectTarget(); }
+      const accel = e.metaKey || e.ctrlKey;
+      if (accel && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        selectTarget();
+      }
       if (e.key === "Escape") cleanup();
       if (e.ctrlKey || e.metaKey || e.shiftKey) return;
-      if (e.keyCode == 32 && e.altKey || e.keyCode == 119 & !e.altKey) { // alt+space or f8
+      if ((e.keyCode == 32 && e.altKey) || (e.keyCode == 119) & !e.altKey) {
+        // alt+space or f8
         e.preventDefault();
-        if (tts.playing) tts.btnStop.click(); else tts.btnPlay.click();
+        if (tts.playing) tts.btnStop.click();
+        else tts.btnPlay.click();
       }
       if (!e.altKey) return;
       if (e.keyCode == 187) {
@@ -862,11 +764,49 @@
 
   // Pre-compile regexes and moves constants outside for performance
   const ABBREV = new Set([
-    "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St", "Bros",
-    "V", "v", "Fig", "Det", "Rev", "Sen", "Capt", "Sgt", "Col", "Adm",
-    "U.S", "U.K", "A.I", "A.M", "P.M", "a.m", "p.m", "e.g", "i.e", "Vs", "vs", "cf",
-    "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug",
-    "Sep", "Sept", "Oct", "Nov", "Dec",
+    "Mr",
+    "Mrs",
+    "Ms",
+    "Dr",
+    "Prof",
+    "Sr",
+    "Jr",
+    "St",
+    "Bros",
+    "V",
+    "v",
+    "Fig",
+    "Det",
+    "Rev",
+    "Sen",
+    "Capt",
+    "Sgt",
+    "Col",
+    "Adm",
+    "U.S",
+    "U.K",
+    "A.I",
+    "A.M",
+    "P.M",
+    "a.m",
+    "p.m",
+    "e.g",
+    "i.e",
+    "Vs",
+    "vs",
+    "cf",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Sept",
+    "Oct",
+    "Nov",
+    "Dec",
   ]);
 
   const RE_ABBREV_FALLBACK = /[^A-Z.]([A-Z]\.)+$/;
@@ -886,9 +826,9 @@
       const prev = str[i - 1];
       const prev2 = str[i - 2];
       // split on , but not in number like 10,000
-      if (prev === ',' && !/[0-9]/.test(str[i])) return true;
-      if ([';', '—'].includes(prev)) return true;
-      if (prev === '-' && prev2 === '-') return true; // "--"
+      if (prev === "," && !/[0-9]/.test(str[i])) return true;
+      if ([";", "—"].includes(prev)) return true;
+      if (prev === "-" && prev2 === "-") return true; // "--"
       return false;
     };
 
@@ -911,36 +851,40 @@
   }
 
   const TTS_SKIP_BLOCKS = [
-    'header',
-    'footer',
-    'caption',
-    'figcaption',
+    "header",
+    "footer",
+    "caption",
+    "figcaption",
     '[attr*="caption"]',
     '[attr*="header"]',
     '[attr*="author"]',
-    '[aria-hidden]',
-    'header *',
-    'footer *',
-    'caption *',
-    'figcaption *',
+    "[aria-hidden]",
+    "header *",
+    "footer *",
+    "caption *",
+    "figcaption *",
     '[attr*="caption"] *',
     '[attr*="header"] *',
     '[attr*="author"] *',
-    '[aria-hidden] *',
-  ].join(', ');
+    "[aria-hidden] *",
+  ].join(", ");
 
   function segmentSentences() {
-    const [MIN_CHARS, MAX_CHARS] = SERVERS.get(tts.server)?.chunk_size || [35, 150];
+    const [MIN_CHARS, MAX_CHARS] = SERVERS.get(tts.server)?.chunk_size || [
+      35, 150,
+    ];
 
     const scope = contentHost.querySelector("#rv-article-body");
     if (!scope) return { texts: [], meta: [] };
 
-    const allBlocks = Array.from(scope.querySelectorAll(`:is(${BLOCKS}):not(${TTS_SKIP_BLOCKS})`));
+    const allBlocks = Array.from(
+      scope.querySelectorAll(`:is(${BLOCKS}):not(${TTS_SKIP_BLOCKS})`),
+    );
 
     // Filter for containers that have direct text or are leaf nodes
-    const validContainers = allBlocks.filter(el => {
-      const hasDirectText = Array.from(el.childNodes).some(n =>
-        n.nodeType === Node.TEXT_NODE && n.nodeValue.trim().length > 5
+    const validContainers = allBlocks.filter((el) => {
+      const hasDirectText = Array.from(el.childNodes).some(
+        (n) => n.nodeType === Node.TEXT_NODE && n.nodeValue.trim().length > 5,
       );
       return hasDirectText || !el.querySelector(BLOCKS);
     });
@@ -970,10 +914,7 @@
 
     // Use a Set for O(1) lookups inside the TreeWalker
     const containerSet = new Set(validContainers);
-    const SKIP_TEXTS = [
-      'Reading time',
-      'Temps de lecture',
-    ];
+    const SKIP_TEXTS = ["Reading time", "Temps de lecture"];
 
     for (const el of validContainers) {
       // Use matches() to skip sup/label and check containerSet to prevent double-reading nested blocks
@@ -981,9 +922,11 @@
       const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
         acceptNode: (n) => {
           const p = n.parentElement;
-          if (p.matches('sup, sup *, label, label *')) return NodeFilter.FILTER_REJECT;
-          if (SKIP_TEXTS.some(txt => n.textContent.includes(txt))) return NodeFilter.FILTER_REJECT;
-          if (p.matches('blockquote, blockquote *')) inBlockQuote = true;
+          if (p.matches("sup, sup *, label, label *"))
+            return NodeFilter.FILTER_REJECT;
+          if (SKIP_TEXTS.some((txt) => n.textContent.includes(txt)))
+            return NodeFilter.FILTER_REJECT;
+          if (p.matches("blockquote, blockquote *")) inBlockQuote = true;
 
           let walk = p;
 
@@ -992,12 +935,12 @@
             walk = walk.parentElement;
           }
           return NodeFilter.FILTER_ACCEPT;
-        }
+        },
       });
 
       let plain = "";
       let n;
-      while (n = tw.nextNode()) {
+      while ((n = tw.nextNode())) {
         plain += n.nodeValue;
       }
       if (!plain) continue;
@@ -1006,7 +949,8 @@
       // " ...... "
       // " ...... "
       // which screws up our segmenting
-      if (inBlockQuote) plain = plain.replace(/["\r\n]/g, ' ').replace(/\s{2,}/g, ' ');
+      if (inBlockQuote)
+        plain = plain.replace(/["\r\n]/g, " ").replace(/\s{2,}/g, " ");
 
       const segments = SEGMENTER.segment(plain);
       let groupStart = -1;
@@ -1023,7 +967,7 @@
 
         // Check abbreviation
         let isAbbrev = false;
-        if (trimmed.endsWith('.')) {
+        if (trimmed.endsWith(".")) {
           if (RE_ABBREV_FALLBACK.test(trimmed)) isAbbrev = true;
           else {
             const m = trimmed.match(RE_ABBREV_MATCH);
@@ -1069,7 +1013,9 @@
 
     // Try to restore the reading index
     if (savedEl) {
-      const newIdx = tts.meta.findIndex(m => m.el === savedEl && m.start >= savedOffset);
+      const newIdx = tts.meta.findIndex(
+        (m) => m.el === savedEl && m.start >= savedOffset,
+      );
       tts.index = newIdx !== -1 ? newIdx : 0;
     } else {
       // clamp tts.index
@@ -1085,23 +1031,29 @@
   // --------------------------
   async function toggle() {
     const existing = document.getElementById("reader-view-overlay");
-    if (existing) { existing.querySelector("#rv-close")?.click(); return; }
-    if (!window.Readability) { console.error("Readability not found. Inject readability.js first."); return; }
+    if (existing) {
+      existing.querySelector("#rv-close")?.click();
+      return;
+    }
+    if (!window.Readability) {
+      console.error("Readability not found. Inject readability.js first.");
+      return;
+    }
     // console.time('total');
     // console.time('prep');
 
     const cloned = document.cloneNode(true);
     const REMOVE_SELECTORS = [
-      'style',
-      'script',
-      'noscript',
-      'dialog',
-      'modal',
-      'form',
-      'header',
-      'footer',
-      'aside',
-      'nav',
+      "style",
+      "script",
+      "noscript",
+      "dialog",
+      "modal",
+      "form",
+      "header",
+      "footer",
+      "aside",
+      "nav",
       '[rel*="category"]',
       '[class*="footer"]',
       '[class*="tags"]',
@@ -1115,9 +1067,9 @@
       '[class*="share"]',
     ];
     PER_SITE_REMOVE = [
-      ['lesswrong.com', '[class*="FixedPositionToC"]'],
-      ['slate.fr', '[class*="to-read"]'],
-      ['stratechery.com', 'sup, sup *'],
+      ["lesswrong.com", '[class*="FixedPositionToC"]'],
+      ["slate.fr", '[class*="to-read"]'],
+      ["stratechery.com", "sup, sup *"],
     ];
     for (const [url, elem] of PER_SITE_REMOVE) {
       if (currentPageUrl.includes(url)) {
@@ -1125,33 +1077,41 @@
         break;
       }
     }
-    cloned.querySelectorAll(REMOVE_SELECTORS.join(',')).forEach(el => el.remove());
+    cloned
+      .querySelectorAll(REMOVE_SELECTORS.join(","))
+      .forEach((el) => el.remove());
 
     const junkPhrases = [
-      'Skip to main content',
-      'Sign up for',
-      'Subscribe to',
-      'Continue reading',
-      'Most Popular',
-      'Follow us on',
-      'Abonnez-vous gratuitement'
+      "Skip to main content",
+      "Sign up for",
+      "Subscribe to",
+      "Continue reading",
+      "Most Popular",
+      "Follow us on",
+      "Abonnez-vous gratuitement",
     ];
-    cloned.querySelectorAll(`:is(${BLOCKS},a):not(:has(${BLOCKS}))`).forEach(el => {
-      if (junkPhrases.some(phrase => el.textContent.includes(phrase))) el.remove();
-    });
+    cloned
+      .querySelectorAll(`:is(${BLOCKS},a):not(:has(${BLOCKS}))`)
+      .forEach((el) => {
+        if (junkPhrases.some((phrase) => el.textContent.includes(phrase)))
+          el.remove();
+      });
 
     // if there is <article> remove all blocks not a descendant or ancestor of <article>
-    if (cloned.querySelector('article')) {
-      cloned.querySelectorAll(`:is(${BLOCKS}):not(article *):not(:has(article))`).forEach(el => el.remove());
+    if (cloned.querySelector("article")) {
+      cloned
+        .querySelectorAll(`:is(${BLOCKS}):not(article *):not(:has(article))`)
+        .forEach((el) => el.remove());
     }
 
     const options = {
-      classesToPreserve: [
-        /header|caption|author/,
-      ],
+      classesToPreserve: [/header|caption|author/],
     };
     const article = new window.Readability(cloned, options).parse();
-    if (!article || !article.content) { console.log("Readability returned no content."); return; }
+    if (!article || !article.content) {
+      console.log("Readability returned no content.");
+      return;
+    }
     // console.timeEnd('prep');
     // console.time('rv-active');
 
@@ -1177,7 +1137,7 @@
     // otherwise adding UI elements causes DOM restructuring
     // which is slow on very large pages
     // console.time('insert content');
-    overlay.querySelector('#rv-article-body').innerHTML = article.content;
+    overlay.querySelector("#rv-article-body").innerHTML = article.content;
     // console.timeEnd('insert content');
 
     // console.time('segment');
@@ -1187,27 +1147,27 @@
   }
 
   function generateRatingControlHTML(rating) {
-      let html = '';
-      for (let i = 3; i >= 1; i--) {
-          const starChar = '★';
-          const isRated = (i <= rating) ? 'rated' : '';
-          html += `<span class="rv-rating-star ${isRated}" data-rating-val="${i}">${starChar}</span>`;
-      }
-      return html;
+    let html = "";
+    for (let i = 3; i >= 1; i--) {
+      const starChar = "★";
+      const isRated = i <= rating ? "rated" : "";
+      html += `<span class="rv-rating-star ${isRated}" data-rating-val="${i}">${starChar}</span>`;
+    }
+    return html;
   }
 
   function getCurrentRating() {
-      return prefs.ratings?.[tts.server]?.[tts.voice] || 0;
+    return prefs.ratings?.[tts.server]?.[tts.voice] || 0;
   }
 
   // Re-generate HTML to apply 'rated' class for persistence and correct character/color.
   function updateRatingDisplay() {
-      const rating = getCurrentRating();
-      tts.rating.innerHTML = generateRatingControlHTML(rating);
+    const rating = getCurrentRating();
+    tts.rating.innerHTML = generateRatingControlHTML(rating);
   }
 
   async function loadServerUI() {
-    const serversDiv = overlay.querySelector('#rv-servers');
+    const serversDiv = overlay.querySelector("#rv-servers");
     const speedInp = overlay.querySelector("#rv-speed");
     const speedLabel = overlay.querySelector("#rv-speed-label");
     const fragment = document.createDocumentFragment();
@@ -1220,7 +1180,7 @@
       try {
         const res = await chrome.runtime.sendMessage({
           type: "tts.listVoices",
-          payload: { server: id }
+          payload: { server: id },
         });
         if (res?.ok) {
           server.voices = res.voices;
@@ -1230,35 +1190,37 @@
 
       if (!server.voices.length) continue;
 
-      const radioInput = document.createElement('input');
-      radioInput.type = 'radio';
+      const radioInput = document.createElement("input");
+      radioInput.type = "radio";
       radioInput.id = `server-${id}`;
-      radioInput.name = 'tts_server';
+      radioInput.name = "tts_server";
       radioInput.value = id;
       radioInput.checked = id == tts.server || id == liveServer;
-      radioInput.className = 'rv-radio';
+      radioInput.className = "rv-radio";
 
-      const radioLabel = document.createElement('label');
+      const radioLabel = document.createElement("label");
       radioLabel.htmlFor = `server-${id}`;
       radioLabel.textContent = server.name;
 
       fragment.appendChild(radioInput);
       fragment.appendChild(radioLabel);
 
-      radioInput.addEventListener('change', (event) => {
-          if (event.target.checked) {
-              const newServer = parseInt(event.target.value, 10);
-              if (newServer == tts.server) return;
-              invalidateAudio();
-              tts.server = newServer;
-              prefs.server = newServer;
-              buildSegments();
-              speedInp.style.display = SERVERS.get(tts.server)?.speed ? 'inherit' : 'none';
-              speedLabel.style.display = speedInp.style.display;
-              updateRatingDisplay();
-              savePrefs();
-              updateVoiceUI();
-          }
+      radioInput.addEventListener("change", (event) => {
+        if (event.target.checked) {
+          const newServer = parseInt(event.target.value, 10);
+          if (newServer == tts.server) return;
+          invalidateAudio(continuePlay=false);
+          tts.server = newServer;
+          prefs.server = newServer;
+          buildSegments();
+          speedInp.style.display = SERVERS.get(tts.server)?.speed
+            ? "inherit"
+            : "none";
+          speedLabel.style.display = speedInp.style.display;
+          updateRatingDisplay();
+          savePrefs();
+          updateVoiceUI();
+        }
       });
     }
 
@@ -1272,9 +1234,9 @@
     const voices = SERVERS.get(tts.server).voices;
     if (voices.length) {
       // 1. Prepare for sorting
-      let voiceData = voices.map(v => ({
-          name: v,
-          rating: serverVoiceRatings[v] || 0
+      let voiceData = voices.map((v) => ({
+        name: v,
+        rating: serverVoiceRatings[v] || 0,
       }));
 
       // 2. Sort by rating (descending). The highest rated voices appear first.
@@ -1285,7 +1247,7 @@
       for (const data of voiceData) {
         const opt = document.createElement("option");
         opt.value = data.name;
-        const stars = '⭐'.repeat(Math.min(3, data.rating));
+        const stars = "⭐".repeat(Math.min(3, data.rating));
         opt.textContent = stars ? `${data.name}  ${stars}` : data.name;
         fragment.appendChild(opt);
       }
@@ -1293,7 +1255,9 @@
 
       // 4. Set selected voice
       const preferred = prefs.voice[tts.server];
-      tts.voiceEl.value = voices.includes(preferred) ? preferred : (voices[0] || "");
+      tts.voiceEl.value = voices.includes(preferred)
+        ? preferred
+        : voices[0] || "";
       tts.voice = tts.voiceEl.value;
       updateRatingDisplay();
       updateSpeedUI();
@@ -1301,17 +1265,17 @@
   }
 
   function updateSpeedUI() {
-      const serverDefault = SERVERS.get(tts.server)?.speed || 1.0;
-      const savedSpeed = prefs.speeds?.[tts.server]?.[tts.voice];
-      const speedValue = savedSpeed ?? serverDefault;
-      const speedInp = overlay.querySelector("#rv-speed");
-      const speedLabel = overlay.querySelector("#rv-speed-label");
-      tts.speed = speedValue;
-      speedInp.value = speedValue;
-      speedLabel.textContent = `${speedValue}x`;
+    const serverDefault = SERVERS.get(tts.server)?.speed || 1.0;
+    const savedSpeed = prefs.speeds?.[tts.server]?.[tts.voice];
+    const speedValue = savedSpeed ?? serverDefault;
+    const speedInp = overlay.querySelector("#rv-speed");
+    const speedLabel = overlay.querySelector("#rv-speed-label");
+    tts.speed = speedValue;
+    speedInp.value = speedValue;
+    speedLabel.textContent = `${speedValue}x`;
   }
 
-  function paragraphStartIndexAt(idx) {00
+  function paragraphStartIndexAt(idx) {
     if (!tts.meta?.length || idx < 0 || idx >= tts.meta.length) return -1;
     const el = tts.meta[idx].el;
     while (idx > 0 && tts.meta[idx - 1].el === el) idx--;
@@ -1335,7 +1299,7 @@
     // Walk up until we find the element we actually registered in tts.meta.
     // We stop at scope to stay within the article bounds.
     while (el && scope.contains(el)) {
-      if (tts.meta.some(m => m.el === el)) break;
+      if (tts.meta.some((m) => m.el === el)) break;
       const parent = el.parentElement?.closest(BLOCKS);
       if (!parent) break;
       el = parent;
@@ -1359,7 +1323,7 @@
 
     // Fallback: first sentence in this element
     if (idx < 0) {
-      idx = tts.meta.findIndex(m => m.el === el);
+      idx = tts.meta.findIndex((m) => m.el === el);
     }
     return idx;
   }
@@ -1376,47 +1340,53 @@
 
     await loadServerUI();
 
-    speedInp.style.display = SERVERS.get(tts.server)?.speed ? 'inherit' : 'none';
+    speedInp.style.display = SERVERS.get(tts.server)?.speed
+      ? "inherit"
+      : "none";
     speedLabel.style.display = speedInp.style.display;
 
     if (tts.server) updateVoiceUI();
     // hide play controls if no live server
-    overlay.querySelector("#rv-tts").style.display = tts.server ? 'inherit' : 'none';
+    overlay.querySelector("#rv-tts").style.display = tts.server
+      ? "inherit"
+      : "none";
 
     tts.scrl.checked = prefs.autoScroll;
-    overlay.querySelector("#rv-scrl-div").style.display = tts.server ? 'inherit' : 'none';
+    overlay.querySelector("#rv-scrl-div").style.display = tts.server
+      ? "inherit"
+      : "none";
 
     // Handle click to set rating
-    tts.rating.addEventListener('click', (e) => {
-        const target = e.target.closest('.rv-rating-star');
-        if (!target) return;
+    tts.rating.addEventListener("click", (e) => {
+      const target = e.target.closest(".rv-rating-star");
+      if (!target) return;
 
-        const currentRating = getCurrentRating();
-        const clickedRating = parseInt(target.dataset.ratingVal, 10);
-        let newRating = clickedRating;
+      const currentRating = getCurrentRating();
+      const clickedRating = parseInt(target.dataset.ratingVal, 10);
+      let newRating = clickedRating;
 
-        // If user clicks the currently set rating, unset it (set to 0)
-        if (clickedRating === currentRating) {
-            newRating = 0;
-        }
+      // If user clicks the currently set rating, unset it (set to 0)
+      if (clickedRating === currentRating) {
+        newRating = 0;
+      }
 
-        // --- Save the new rating ---
-        // Ensure ratings structure exists
-        if (!prefs.ratings) prefs.ratings = {};
-        if (!prefs.ratings[tts.server]) prefs.ratings[tts.server] = {};
+      // --- Save the new rating ---
+      // Ensure ratings structure exists
+      if (!prefs.ratings) prefs.ratings = {};
+      if (!prefs.ratings[tts.server]) prefs.ratings[tts.server] = {};
 
-        if (newRating === 0) {
-            delete prefs.ratings[tts.server][tts.voice];
-        } else {
-            prefs.ratings[tts.server][tts.voice] = newRating;
-        }
+      if (newRating === 0) {
+        delete prefs.ratings[tts.server][tts.voice];
+      } else {
+        prefs.ratings[tts.server][tts.voice] = newRating;
+      }
 
-        savePrefs().then(() => {
-            // Update the interactive display and the dropdown list
-            updateRatingDisplay();
-            // Need to call updateVoiceUI to update the dropdown text and sort
-            updateVoiceUI();
-        });
+      savePrefs().then(() => {
+        // Update the interactive display and the dropdown list
+        updateRatingDisplay();
+        // Need to call updateVoiceUI to update the dropdown text and sort
+        updateVoiceUI();
+      });
     });
 
     tts.voiceEl.addEventListener("change", () => {
@@ -1459,11 +1429,18 @@
       playAt(startIndex);
     };
 
-    tts.btnStop.onclick = () => { stopPlayback(); saveReadingProgress() };
+    tts.btnStop.onclick = () => {
+      stopPlayback();
+      saveReadingProgress();
+    };
 
-    btnPrev.onclick = () => { playAt(tts.index - 1); };
+    btnPrev.onclick = () => {
+      playAt(tts.index - 1);
+    };
 
-    tts.btnNext.onclick = () => { playAt(tts.index + 1); };
+    tts.btnNext.onclick = () => {
+      playAt(tts.index + 1);
+    };
 
     btnPrevP.onclick = () => {
       if (!tts.prepared || !tts.meta?.length) return;
@@ -1498,29 +1475,40 @@
       playAt(nextStart);
     };
 
-    function playAtClick(e, moveOnly=false) {
-      if (!moveOnly) e.preventDefault();  // allow clicking on links
+    function playAtClick(e, moveOnly = false) {
+      if (!moveOnly) e.preventDefault(); // allow clicking on links
       const idx = findIdxAtClick(e);
       if (idx !== null) playAt(idx, moveOnly);
     }
 
     // dbl click, middle click, or meta + click on sentence while not playing to start playing there
-    contentHost.addEventListener("dblclick", (e) => {
-      if (!tts.playing) playAtClick(e);
-    }, true);
+    contentHost.addEventListener(
+      "dblclick",
+      (e) => {
+        if (!tts.playing) playAtClick(e);
+      },
+      true,
+    );
 
-    contentHost.addEventListener("mouseup", (e) => {
-      if (e.button === 1) playAtClick(e);
-    }, true);
+    contentHost.addEventListener(
+      "mouseup",
+      (e) => {
+        if (e.button === 1) playAtClick(e);
+      },
+      true,
+    );
 
-    contentHost.addEventListener("click", (e) => {
-      if (e.metaKey) {
-        playAtClick(e);
-        return;
-      }
-      // Single click: if playing, then start playing there, else just move index
-      playAtClick(e, moveOnly = !tts.playing);
-    }, true);
-
+    contentHost.addEventListener(
+      "click",
+      (e) => {
+        if (e.metaKey) {
+          playAtClick(e);
+          return;
+        }
+        // Single click: if playing, then start playing there, else just move index
+        playAtClick(e, (moveOnly = !tts.playing));
+      },
+      true,
+    );
   }
 })();

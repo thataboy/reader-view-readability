@@ -28,20 +28,20 @@
         active: true,
         speed: 1.2,
         chunk_size: [80, 350],
-        pause: 100,
+        pause: 50,
       },
     ],
     [
       Server.POCKET,
-      { name: "Pocket", active: true, chunk_size: [80, 350], pause: 50 },
+      { name: "Pocket", active: true, chunk_size: [80, 350], pause: 0 },
     ],
     [
       Server.CANDLE,
-      { name: "Candle", active: false, chunk_size: [80, 350], pause: 50 },
+      { name: "Candle", active: false, chunk_size: [80, 350], pause: 0 },
     ],
     [
       Server.MLX,
-      { name: "P-mlx", active: false, chunk_size: [80, 350], pause: 50 },
+      { name: "P-mlx", active: false, chunk_size: [80, 350], pause: 0 },
     ],
   ]);
 
@@ -56,7 +56,7 @@
   const defaults = {
     fontSize: 17,
     maxWidth: 860,
-    server: Server.SUPERTONIC,
+    server: Server.POCKET,
     voice: {},
     speeds: {},
     ratings: {},
@@ -93,10 +93,9 @@
   // --------------------------
   const tts = {
     prepared: false,
-    server: Server.SUPERTONIC,
+    server: null,
     voice: "",
     speed: 1.0,
-    audioCtx: null,
     segments: [],
     texts: [],
     index: 0,
@@ -116,7 +115,7 @@
     highlightSpan: null, // active <span> wrapper for current sentence
   };
 
-  const LONG_PAGE_THRESHOLD = 150; // Minimum segments to consider a page "long"
+  const LONG_PAGE_THRESHOLD = 100; // Minimum segments to consider a page "long"
   const MAX_SAVED_PAGES = 100; // Max number of saved reading positions
   const currentPageUrl = window.location.href.split(/[?#]/)[0]; // Use URL without query/hash
   const _lang = (document.documentElement.lang || "en")
@@ -140,8 +139,8 @@
     if (idx < 0 || idx >= tts.segments.length) return;
     tts.index = idx;
     if (moveOnly || !tts.server) {
-      highlightCurrent();
       saveReadingProgress();
+      highlightCurrent();
       return;
     }
     stopPlayback();
@@ -153,6 +152,7 @@
   async function scheduleAt(index) {
     const token = ++tts.playToken;
     tts.index = index;
+    saveReadingProgress();
     const _sig = sig();
 
     highlightCurrent();
@@ -176,7 +176,7 @@
       }
 
       await chrome.runtime.sendMessage({
-        type: "tts.window",
+        type: "tts.fetchWindow",
         payload: {
           signature: _sig,
           token,
@@ -313,10 +313,6 @@
           stopPlayback();
           tts.index = 0;
           setStatus("Finished");
-          chrome.runtime.sendMessage({
-            type: "tts.stateChanged",
-            payload: "stopped",
-          });
         }
         return;
       }
@@ -330,6 +326,10 @@
         console.log("TTS error:", p.error || p);
         setStatus();
         stopPlayback();
+        return;
+      }
+      if (msg.type === "content.tts.cleanup") {
+        cleanup();
         return;
       }
     });
@@ -661,7 +661,7 @@
     // const outside = Array.from(document.body.children).filter(n => n !== overlay);
     // outside.forEach(n => { try { n.setAttribute("inert", ""); } catch(_){} });
     async function cleanup() {
-      await saveReadingProgress();
+      // await saveReadingProgress();
       stopPlayback();
       try {
         chrome.runtime.sendMessage({ type: "tts.cleanup", payload: {} });
@@ -671,17 +671,12 @@
       document.removeEventListener("copy", onCopy, true);
       // outside.forEach(n => { try { n.removeAttribute("inert"); } catch(_){} });
       document.documentElement.classList.remove("rv-active");
-      if (tts.audioCtx) {
-        try {
-          tts.audioCtx.close();
-        } catch {}
-      }
-      tts.audioCtx = null;
       tts.prepared = false;
       tts.segments = [];
       tts.texts = [];
       tts.index = 0;
       tts.meta = [];
+      tts.server = null;
       tts.highlightSpan = null;
     }
 
@@ -1043,8 +1038,6 @@
       console.error("Readability not found. Inject readability.js first.");
       return;
     }
-    // console.time('total');
-    // console.time('prep');
 
     const cloned = document.cloneNode(true);
     const REMOVE_SELECTORS = [
@@ -1058,6 +1051,8 @@
       "footer",
       "aside",
       "nav",
+      "time",
+      "date",
       '[rel*="category"]',
       '[class*="footer"]',
       '[class*="tags"]',
@@ -1116,23 +1111,14 @@
       console.log("Readability returned no content.");
       return;
     }
-    // console.timeEnd('prep');
-    // console.time('rv-active');
 
     document.documentElement.classList.add("rv-active");
-    // console.timeEnd('rv-active');
-    // console.time('buildoverlay');
     buildOverlay(article);
-    // console.timeEnd('buildoverlay');
 
     prefs = await loadPrefs();
     tts.server = prefs.server;
-    // console.time('attachoverlay');
     attachOverlay();
-    // console.timeEnd('attachoverlay');
-    // console.time('setuptts');
     await setupTTSControls();
-    // console.timeEnd('setuptts');
 
     const savedProgress = prefs.readingProgress[currentPageUrl];
     tts.index = savedProgress?.index || 0;
@@ -1140,14 +1126,9 @@
     // don't attach article content until we finish building UI
     // otherwise adding UI elements causes DOM restructuring
     // which is slow on very large pages
-    // console.time('insert content');
     overlay.querySelector("#rv-article-body").innerHTML = article.content;
-    // console.timeEnd('insert content');
 
-    // console.time('segment');
     buildSegments();
-    // console.timeEnd('segment');
-    // console.timeEnd('total');
   }
 
   function generateRatingControlHTML(rating) {
@@ -1178,9 +1159,9 @@
 
     let liveServer = null;
     for (const [id, server] of SERVERS.entries()) {
+      server.voices = [];
       if (!server.active) continue;
       // load voices from server, thereby checking if server is alive
-      server.voices = [];
       try {
         const res = await chrome.runtime.sendMessage({
           type: "tts.listVoices",
@@ -1230,7 +1211,7 @@
 
     serversDiv.replaceChildren(fragment);
     // fallback to first live server if current server is not responding
-    if (!SERVERS.get(tts.server)?.voices.length) tts.server = liveServer;
+    if (!SERVERS.get(tts.server)?.voices?.length) tts.server = liveServer;
   }
 
   function updateVoiceUI() {
@@ -1435,7 +1416,7 @@
 
     tts.btnStop.onclick = () => {
       stopPlayback();
-      saveReadingProgress();
+      // saveReadingProgress();
     };
 
     btnPrev.onclick = () => {

@@ -10,11 +10,11 @@
 //
 // Background is a message relay only.
 
-function emit(tabId, eventType, payload) {
+function emit(tabId, type, payload) {
   try {
     chrome.runtime.sendMessage({
-      type: "offscreen.tts.event",
-      payload: { tabId, eventType, payload },
+      type: "tts.forwardToTab",
+      payload: { tabId, type, payload },
     });
   } catch {}
 }
@@ -35,34 +35,27 @@ const SERVER_IP = navigator.userAgent.includes("Mac OS X")
   ? "127.0.0.1"
   : "192.168.1.11";
 
-function sanitizeCommon(text) {
-  return String(text || "")
-    .replace(/\s+/g, " ")
-    .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[\u201C\u201D]/g, '"')
-    .trim();
-}
 
 const SERVERS = new Map([
   [Server.MY_KOKORO, { port: 9090, min_len: 2, streamable: false }],
   [
     Server.VOX_ANE,
-    { port: 9000, min_len: 5, sanitizer: sanitizeCommon, streamable: true },
+    { port: 9000, min_len: 5, streamable: true },
   ],
   [
     Server.SUPERTONIC,
-    { port: 8001, min_len: 5, sanitizer: sanitizeCommon, streamable: true },
+    { port: 8001, min_len: 5, sanitizer: sanitizeSupertonic, streamable: true },
   ],
   [
     Server.POCKET,
-    { port: 9800, min_len: 2, sanitizer: sanitizeCommon, streamable: true },
+    { port: 9800, min_len: 2, sanitizer: sanitizePocket, streamable: true },
   ],
   [
     Server.CANDLE,
     {
       port: 9900,
       min_len: 2,
-      sanitizer: sanitizeCommon,
+      sanitizer: sanitizePocket,
       streamable: true,
       extra_params: { model: "pocket-tts" },
     },
@@ -72,11 +65,150 @@ const SERVERS = new Map([
     {
       port: 9700,
       min_len: 2,
-      sanitizer: sanitizeCommon,
+      sanitizer: sanitizePocket,
       streamable: false,
     },
   ],
 ]);
+
+// function sanitizeCommon(text) {
+//   return String(text || "")
+//     .replace(/\s+/g, " ")
+//     .replace(/[\u2018\u2019]/g, "'")
+//     .replace(/[\u201C\u201D]/g, '"')
+//     .trim();
+// }
+
+// fix a bunch of weird quirks with VoxCPM
+function sanitizeVox(text) {
+  // Vox freaks out if text is all caps
+  if (/^[^a-z]*[A-Z][^a-z]*$/.test(text)) text = text.toLowerCase();
+  return text
+    .replace(/[()[\]|~`/…]/g, ' ')
+    // .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+    .replace(/[“”"]/g, ' ')
+    .replace(/\!{2,}/g, '!')
+    // .replace(/[‘’]/g, "'")
+    .replace(/(\.|\*|\-){3,}/g, ' ')
+    // .replace(/-(?![a-zA-Z])|(?<![a-zA-Z])-/g, ' ')
+    // .replace(/[—:;]/g, ', ')
+    // .replace(/[^\n\x20-\x7E]/g, ' ').replace(/ +/g, ' ').trim();
+    .replace(/([,.])\s*[.,]/g, '$1 ')
+    .replace(/^[,.]\s*/, '')
+    .replace(/(\s*(\.))+$/, '$1')
+    .replace(/\s+([,.])/g, '$1')
+    // .replace(/(["”’'])\s*\.?\s*$/, '')
+    // .replace(/\s+([”’])/g, '$1')
+    // .replace(/([‘“])\s+/g, '$1')
+    // .replace(/(\s*[,!:;]\s*)+$/, '')
+    // .replace(/^(\s*[,!:;]\s*)+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+
+/**
+ * Normalizes a string by converting special characters/accents
+ * to their closest ASCII equivalents.
+ */
+const manualMap = {
+  'ø': 'o', 'Ø': 'O',
+  'æ': 'ae', 'Æ': 'AE',
+  'œ': 'oe', 'Œ': 'OE',
+  'ß': 'ss', 'ł': 'l', 'Ł': 'L'
+};
+
+function sanitizeSupertonic(str) {
+  return str
+    .replace(/[><()\[\]^]/g, ' ')
+    // remove emojis
+    // .replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, "")
+    // normalize special chars
+    .replace(/[øØæÆœŒßłŁ]/g, match => manualMap[match])
+    // Use NFD normalization to decompose accents (e.g., 'é' -> 'e' + '´')
+    // .normalize("NFD")
+    // Use Regex to remove the "Combining Diacritical Marks" (the accents)
+    // .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function sanitizePocket(text) {
+  return text
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[[\]]/g, "")
+    .replace(/(\d)\.(\d)/g, '$1 point $2')
+    .replace(/([a-z]{2,3})\.([a-z]{2,3}\d)/g, '$1 dot $2')
+    // remove extraneous punctuation after . ? !
+    .replace(/([\.\?!])[^\s\p{L}\p{N}]+/gu, '$1 ')
+    .replace(/\$\s?([\d,]+(?:\.\d{2})?)/g, '$1 dollars')
+    // drop . from middle initial
+    .replace(/\s([A-Z])\.\s/g, ' $1 ')
+    // replace V.I.P. with VIP
+    .replace(/([A-Z]\.){3,}/g, (match) => {  return match.replace(/\./g, ""); } )
+    .trim()
+    ;
+}
+
+function sanitizeCommon(text) {
+  if (!text) return '';
+  return text
+    // Remove URLs (TTS engines usually mangle these)
+    .replace(/(https?:\/\/[^\s]+)/g, '')
+
+    // Whitelist: Keep letters (\p{L}), numbers (\p{N}),
+    // basic punctuation (\p{P}), and spaces (\s).
+    // This automatically strips emojis, arrows, and symbols.
+    .replace(/[^\p{L}\p{N}\p{P}\p{S}\s]/gu, '')
+
+    // !!! and ???
+    .replace(/([!?.])\1+/g, '$1')
+
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Initialized once in the outer scope
+const ABBREVIATION_MAP = {
+  "Mr.": "Mister",
+  "Mrs.": "Misses",
+  "Ms.": "Miss",
+  "Dr.": "Doctor",
+  "V.": "versus",
+  "v.": "versus",
+  "A.I.": "eigh eye",
+  "AI": "eigh eye",
+  "MacOS": "mac oh ess",
+  "lbs.": "pounds",
+  "lbs": "pounds",
+  "Prof.": "Professor",
+  "Bros.": "Brothers",
+  "Sr.": "Senior",
+  "Jr.": "Junior",
+  "Det.": "Detective",
+  "Capt.": "Captain",
+  "Maj.": "Major",
+  "Gen.": "General",
+  "Col.": "Colonel",
+  "Lt.": "Lieutenant",
+  "Fig.": "Figure",
+  "St.": "Saint"
+};
+
+// Escape dots and join keys into a single regex pattern
+const ABBR_REGEX = new RegExp(
+  '(?<=\\s|^)(' +
+  Object.keys(ABBREVIATION_MAP)
+    .map(k => k.replace('.', '\\.'))
+    .join('|')
+  + ')(?=\\s|$|\\b)',
+  'g'
+);
+
+function expandAbbreviations(text) {
+  if (!text) return text;
+  return text.replace(ABBR_REGEX, (matched) => ABBREVIATION_MAP[matched]);
+}
 
 function endpointFor(serverId, route) {
   const cfg = SERVERS.get(serverId);
@@ -88,8 +220,10 @@ function buildBody(serverId, { text, voice, speed, lang }) {
   const cfg = SERVERS.get(serverId);
   if (!cfg) throw new Error("Unknown server");
 
+  let input = sanitizeCommon(text)
   const sanitizer = cfg.sanitizer;
-  const input = sanitizer ? sanitizer(text) : String(text || "");
+  if (sanitizer) input = sanitizer(input);
+  input = expandAbbreviations(input)
 
   return {
     input,
@@ -110,6 +244,8 @@ async function fetchVoices(serverId) {
 // --------------------------
 // Audio utilities
 // --------------------------
+
+const BUFFER_SIZE = navigator.userAgent.includes("Mac OS X") ? 2048 : 4096;
 
 function pcm16leToFloat32(u8) {
   const i16 = new Int16Array(u8.buffer, u8.byteOffset, u8.byteLength / 2);
@@ -181,7 +317,7 @@ class StreamingPcmPlayer {
     this.samplesBuffered = 0;
 
     // Deprecated but reliable; keep for now.
-    this.proc = this.ctx.createScriptProcessor(4096, 0, 1);
+    this.proc = this.ctx.createScriptProcessor(BUFFER_SIZE, 0, 1);
     this.proc.onaudioprocess = (e) => {
       const out = e.outputBuffer.getChannelData(0);
       let written = 0;
@@ -233,7 +369,7 @@ class StreamingPcmPlayer {
   // up to one block already inside the output buffer that hasn't reached the speakers yet.
   // Waiting ~1 block avoids end-of-utterance clipping ("wisd" vs "wisdom").
   playoutGraceMs() {
-    const bs = this.proc?.bufferSize || 4096;
+    const bs = this.proc?.bufferSize || BUFFER_SIZE;
     return (bs / this.ctx.sampleRate) * 1000;
   }
 
@@ -606,7 +742,7 @@ async function streamPlayAndCache(tabId, st, signature, token, index) {
         headerBuf.push(value);
         headerLen += value.length;
 
-        if (headerLen >= 4096) {
+        if (headerLen >= BUFFER_SIZE) {
           const tmp = new Uint8Array(headerLen);
           let off = 0;
           for (const h of headerBuf) {
@@ -937,9 +1073,7 @@ async function handleCleanup(tabId) {
   st.cache.clear();
   st.textByIndex.clear();
   if (st.decodeCtx) {
-    try {
-      await st.decodeCtx.close();
-    } catch {}
+    await st.decodeCtx.close().catch();
     st.decodeCtx = null;
   }
 }
@@ -951,7 +1085,7 @@ async function handleCleanup(tabId) {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || !msg.type) return;
 
-  if (msg.type === "offscreen.tts.window") {
+  if (msg.type === "offscreen.tts.fetchWindow") {
     (async () => {
       try {
         await handleWindow(msg.payload || {});

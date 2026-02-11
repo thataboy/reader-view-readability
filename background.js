@@ -57,10 +57,6 @@ async function ensureOffscreenDocument() {
   }
 }
 
-function forwardToTab(tabId, msg) {
-  try { chrome.tabs.sendMessage(tabId, msg); } catch {}
-}
-
 chrome.tabs.onRemoved.addListener((tabId) => {
   // Best-effort cleanup of per-tab offscreen state.
   try {
@@ -71,29 +67,42 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   } catch {}
 });
 
+// Stop TTS when a tab navigates (Back, forward, link click, refresh, etc.)
+// This keeps offscreen playback aligned with visible page state.
+chrome.webNavigation.onCommitted.addListener(
+  async (details) => {
+    try {
+      // await ensureOffscreen();
+      chrome.runtime.sendMessage({
+        type: "offscreen.tts.cleanup",
+        payload: { tabId: details.tabId },
+      });
+    } catch {}
+  }
+);
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.type) return;
 
   // Offscreen -> Background -> Content
-  if (msg.type === "offscreen.tts.event") {
+  if (msg.type === "tts.forwardToTab") {
     const p = msg.payload || {};
     const tabId = p.tabId;
-    if (tabId != null) {
-      forwardToTab(tabId, { type: p.eventType, payload: p.payload || {} });
-    }
+    if (tabId == null) return;
+    chrome.tabs.sendMessage(tabId, { type: p.type, payload: p.payload || {} }).catch();
     return;
   }
 
   const tabId = sender?.tab?.id;
 
   // Content -> Background -> Offscreen
-  if (msg.type === "tts.window") {
+  if (msg.type === "tts.fetchWindow") {
     (async () => {
       try {
         if (!tabId) return sendResponse?.({ ok: false, error: "No sender tab" });
         await ensureOffscreenDocument();
         await chrome.runtime.sendMessage({
-          type: "offscreen.tts.window",
+          type: "offscreen.tts.fetchWindow",
           payload: { tabId, ...(msg.payload || {}) }
         });
         sendResponse?.({ ok: true });
@@ -105,11 +114,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "tts.stop") {
-    (async () => {
+    (() => {
       try {
         if (!tabId) return sendResponse?.({ ok: false, error: "No sender tab" });
-        await ensureOffscreenDocument();
-        await chrome.runtime.sendMessage({
+        // await ensureOffscreenDocument();
+        chrome.runtime.sendMessage({
           type: "offscreen.tts.stop",
           payload: { tabId }
         });
@@ -122,11 +131,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "tts.cleanup") {
-    (async () => {
+    (() => {
       try {
         if (!tabId) return sendResponse?.({ ok: false, error: "No sender tab" });
-        await ensureOffscreenDocument();
-        await chrome.runtime.sendMessage({
+        // await ensureOffscreenDocument();
+        chrome.runtime.sendMessage({
           type: "offscreen.tts.cleanup",
           payload: { tabId }
         });

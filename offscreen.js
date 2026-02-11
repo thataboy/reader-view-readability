@@ -28,6 +28,7 @@ const Server = Object.freeze({
   SUPERTONIC: 3,
   POCKET: 4,
   CANDLE: 5,
+  MLX: 6,
 });
 
 const SERVER_IP = navigator.userAgent.includes("Mac OS X")
@@ -43,7 +44,7 @@ function sanitizeCommon(text) {
 }
 
 const SERVERS = new Map([
-  [Server.MY_KOKORO, { port: 9090, min_len: 2, streamable: true }],
+  [Server.MY_KOKORO, { port: 9090, min_len: 2, streamable: false }],
   [
     Server.VOX_ANE,
     { port: 9000, min_len: 5, sanitizer: sanitizeCommon, streamable: true },
@@ -64,6 +65,15 @@ const SERVERS = new Map([
       sanitizer: sanitizeCommon,
       streamable: true,
       extra_params: { model: "pocket-tts" },
+    },
+  ],
+  [
+    Server.MLX,
+    {
+      port: 9700,
+      min_len: 2,
+      sanitizer: sanitizeCommon,
+      streamable: false,
     },
   ],
 ]);
@@ -237,6 +247,56 @@ class StreamingPcmPlayer {
   }
 }
 
+class BufferSourcePlayer {
+  constructor({ ctx }) {
+    this.ctx = ctx;
+    this.gain = this.ctx.createGain();
+    this.gain.connect(this.ctx.destination);
+    this.source = null;
+    this.ended = null;
+  }
+
+  async startFromAudioBuffer(audioBuffer) {
+    if (this.ctx.state === "suspended") await this.ctx.resume();
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = audioBuffer;
+    src.connect(this.gain);
+    this.source = src;
+
+    this.ended = new Promise((resolve) => {
+      src.onended = resolve;
+    });
+
+    src.start(0);
+  }
+
+  async waitEnded(signal) {
+    if (!this.ended) return;
+    if (!signal) return await this.ended;
+
+    await Promise.race([
+      this.ended,
+      new Promise((resolve) => {
+        signal.addEventListener("abort", resolve, { once: true });
+      }),
+    ]);
+  }
+
+  async stop() {
+    try {
+      this.source?.stop(0);
+    } catch {}
+    try {
+      this.source?.disconnect();
+    } catch {}
+    try {
+      this.gain?.disconnect();
+    } catch {}
+    // IMPORTANT: do NOT close ctx here (shared per-tab)
+  }
+}
+
 // --------------------------
 // Per-tab engine state
 // --------------------------
@@ -247,7 +307,8 @@ const tabs = new Map();
 //   token: number,
 //   server: number, voice: string, speed: number, lang: string,
 //   textByIndex: Map<number,string>,
-//   cache: Map<string, { sampleRate:number, pcmU8:Uint8Array }>,
+//   cache: Map<string, { sampleRate:number, pcmU8:Uint8Array } | { audioBuffer: AudioBuffer }>,
+//   decodeCtx: AudioContext | null,
 //   aborts: Map<string, AbortController>,    // key -> controller
 //   inFlight: Map<string, Promise<void>>,    // key -> promise that stores cache
 //   queue: string[],
@@ -269,6 +330,7 @@ function getTab(tabId) {
       lang: "en",
       textByIndex: new Map(),
       cache: new Map(),
+      decodeCtx: null,
       aborts: new Map(),
       inFlight: new Map(),
       queue: [],
@@ -284,6 +346,26 @@ function getTab(tabId) {
 
 function cacheKey(signature, index) {
   return `${signature}:${index}`;
+}
+
+function getDecodeCtx(st) {
+  if (st.decodeCtx) return st.decodeCtx;
+  const AudioCtx = self.AudioContext || self.webkitAudioContext;
+  st.decodeCtx = new AudioCtx({ latencyHint: "playback" });
+  return st.decodeCtx;
+}
+
+function makeSilenceBuffer(st, ms = 30) {
+  const ctx = getDecodeCtx(st);
+  const frames = Math.max(1, Math.round((ctx.sampleRate * ms) / 1000));
+  // createBuffer is zero initialized, so this is silence.
+  return ctx.createBuffer(1, frames, ctx.sampleRate);
+}
+
+function isTooShortForServer(cfg, body) {
+  const minLen = cfg.min_len ?? 0;
+  const inputLen = (body.input ?? "").length;
+  return minLen > 0 && inputLen < minLen;
 }
 
 async function stopCurrent(reason = "stopped") {
@@ -353,6 +435,11 @@ async function synthesizeToCache(st, key, index) {
   if (!cfg) throw new Error("Unknown server");
 
   const body = buildBody(serverId, { text, voice, speed, lang });
+  if (isTooShortForServer(cfg, body)) {
+    st.cache.set(key, { audioBuffer: makeSilenceBuffer(st, 30) });
+    return;
+  }
+
   const url = endpointFor(serverId, "/synthesize");
 
   const ac = new AbortController();
@@ -370,25 +457,18 @@ async function synthesizeToCache(st, key, index) {
       if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
 
       const ctype = (r.headers.get("content-type") || "").toLowerCase();
-      if (!ctype.includes("audio/wav")) {
+      if (!ctype.includes("audio/")) {
         throw new Error(
           `Unsupported synthesize content-type: ${ctype || "(none)"}`,
         );
       }
 
       const buf = await r.arrayBuffer();
-      const u8 = new Uint8Array(buf);
-      const header = tryParseWavHeader(u8);
-      if (!header) throw new Error("WAV header parse failed");
-      if (header.audioFormat !== 1) throw new Error("WAV: only PCM supported");
-      if (header.numChannels !== 1) throw new Error("WAV: only mono supported");
-      if (header.bitsPerSample !== 16)
-        throw new Error("WAV: only 16-bit PCM supported");
-
-      const sampleRate = header.sampleRate;
-      const pcmU8 = new Uint8Array(u8.subarray(header.dataOffset)); // copy
-
-      st.cache.set(key, { sampleRate, pcmU8 });
+      // decodeAudioData can detach the input buffer in some implementations.
+      // Pass a copy to be safe.
+      const ctx = getDecodeCtx(st);
+      const audioBuffer = await ctx.decodeAudioData(buf.slice(0));
+      st.cache.set(key, { audioBuffer });
     } finally {
       st.aborts.delete(key);
       st.inFlight.delete(key);
@@ -428,6 +508,11 @@ async function streamPlayAndCache(tabId, st, signature, token, index) {
   }
 
   const body = buildBody(serverId, { text, voice, speed, lang });
+  if (isTooShortForServer(cfg, body)) {
+    st.cache.set(key, { audioBuffer: makeSilenceBuffer(st, 30) });
+    return;
+  }
+
   const url = endpointFor(serverId, "/stream");
 
   const ac = new AbortController();
@@ -665,38 +750,16 @@ async function playFromCache(tabId, st, signature, token, index) {
 
   const ac = new AbortController();
   st.aborts.set(key, ac);
-
-  const player = new StreamingPcmPlayer({ sampleRate: entry.sampleRate });
+  const ctx = getDecodeCtx(st);
+  const player = new BufferSourcePlayer({ ctx });
   current = { tabId, key, signature, token, index, abort: ac, player };
 
-  await player.start();
+  await player.startFromAudioBuffer(entry.audioBuffer);
   emit(tabId, "tts.playing", { signature, token, index });
   st.prefetchGateOpened = true;
   ensurePrefetchLoop(st);
-  const pcmU8 = entry.pcmU8;
-  const chunkBytes = 64 * 1024;
-  for (let off = 0; off < pcmU8.length; off += chunkBytes) {
-    if (
-      !current ||
-      current.tabId !== tabId ||
-      current.token !== token ||
-      current.signature !== signature
-    )
-      return;
-    if (ac.signal.aborted) return;
-    const sub = pcmU8.subarray(off, Math.min(pcmU8.length, off + chunkBytes));
-    player.pushFloat32(pcm16leToFloat32(sub));
-    await new Promise((r) => setTimeout(r, 0));
-  }
 
-  while (
-    current &&
-    current.tabId === tabId &&
-    current.token === token &&
-    player.bufferedSeconds() > 0.0
-  ) {
-    await new Promise((r) => setTimeout(r, 50));
-  }
+  await player.waitEnded(ac.signal);
 
   st.aborts.delete(key);
 
@@ -873,6 +936,12 @@ async function handleCleanup(tabId) {
   const st = getTab(tabId);
   st.cache.clear();
   st.textByIndex.clear();
+  if (st.decodeCtx) {
+    try {
+      await st.decodeCtx.close();
+    } catch {}
+    st.decodeCtx = null;
+  }
 }
 
 // --------------------------

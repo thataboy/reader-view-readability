@@ -12,12 +12,13 @@
     SUPERTONIC: 3,
     POCKET: 4,
     CANDLE: 5,
+    MLX: 6,
   });
 
   const SERVERS = new Map([
     [
       Server.MY_KOKORO,
-      { name: "Kokoro", active: false, speed: 1.0, chunk_size: [35, 80] },
+      { name: "Kokoro", active: true, speed: 1.0, chunk_size: [35, 200] },
     ],
     [Server.VOX_ANE, { name: "Vox", active: false, chunk_size: [35, 80] }],
     [
@@ -27,16 +28,20 @@
         active: true,
         speed: 1.2,
         chunk_size: [80, 350],
-        pause: 0,
+        pause: 100,
       },
     ],
     [
       Server.POCKET,
-      { name: "Pocket", active: true, chunk_size: [80, 350], pause: 0 },
+      { name: "Pocket", active: true, chunk_size: [80, 350], pause: 50 },
     ],
     [
       Server.CANDLE,
-      { name: "Candle", active: true, chunk_size: [80, 350], pause: 0 },
+      { name: "Candle", active: false, chunk_size: [80, 350], pause: 50 },
+    ],
+    [
+      Server.MLX,
+      { name: "P-mlx", active: false, chunk_size: [80, 350], pause: 50 },
     ],
   ]);
 
@@ -697,14 +702,13 @@
       }
       if (e.key === "Escape") cleanup();
       if (e.ctrlKey || e.metaKey || e.shiftKey) return;
-      if ((e.keyCode == 32 && e.altKey) || (e.keyCode == 119) & !e.altKey) {
-        // alt+space or f8
+      if ((e.keyCode == 32 && e.altKey) || (e.key == "F8" && !e.altKey)) {
         e.preventDefault();
         if (tts.playing) tts.btnStop.click();
         else tts.btnPlay.click();
       }
       if (!e.altKey) return;
-      if (e.keyCode == 187) {
+      if (e.key == "F9") {
         e.preventDefault();
         prefs.fontSize = Math.min(32, prefs.fontSize + 1);
         surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
@@ -1209,7 +1213,7 @@
         if (event.target.checked) {
           const newServer = parseInt(event.target.value, 10);
           if (newServer == tts.server) return;
-          invalidateAudio(continuePlay=false);
+          invalidateAudio();
           tts.server = newServer;
           prefs.server = newServer;
           buildSegments();

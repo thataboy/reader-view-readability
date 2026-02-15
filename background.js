@@ -71,7 +71,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // Stop TTS when a tab navigates (Back, forward, link click, refresh, etc.)
 // This keeps offscreen playback aligned with visible page state.
 chrome.webNavigation.onCommitted.addListener(
-  async (details) => {
+  (details) => {
     try {
       // await ensureOffscreen();
       chrome.runtime.sendMessage({
@@ -118,7 +118,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (() => {
       try {
         if (!tabId) return sendResponse?.({ ok: false, error: "No sender tab" });
-        // await ensureOffscreenDocument();
         chrome.runtime.sendMessage({
           type: "offscreen.tts.stop",
           payload: { tabId }
@@ -135,7 +134,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (() => {
       try {
         if (!tabId) return sendResponse?.({ ok: false, error: "No sender tab" });
-        // await ensureOffscreenDocument();
         chrome.runtime.sendMessage({
           type: "offscreen.tts.cleanup",
           payload: { tabId }

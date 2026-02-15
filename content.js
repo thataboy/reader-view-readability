@@ -198,10 +198,10 @@
     }
   }
 
-  function stopPlayback(notifyBackground=true) {
+  function stopPlayback(notifyBackground = true) {
     if (notifyBackground)
       try {
-        chrome.runtime.sendMessage({ type: "tts.stop", payload: {}, });
+        chrome.runtime.sendMessage({ type: "tts.stop", payload: {} });
       } catch {}
 
     tts.playing = false;
@@ -212,7 +212,7 @@
     setStatus();
   }
 
-  function invalidateAudio(continuePlay=true) {
+  function invalidateAudio(continuePlay = true) {
     const wasPlaying = tts.playing;
 
     stopPlayback();
@@ -223,7 +223,9 @@
     } catch {}
 
     if (wasPlaying && continuePlay)
-      setTimeout(() => { playAt(tts.index); }, 500);
+      setTimeout(() => {
+        playAt(tts.index);
+      }, 500);
   }
 
   // Saves the current TTS reading progress (index) to storage.
@@ -273,31 +275,31 @@
         return;
       }
 
+      if (msg.type === "content.tts.cleanup") {
+        cleanup();
+        return;
+      }
+
+      if (!tts.playing) return;
+      const p = msg.payload || {};
+      if (
+        p.signature !== sig() ||
+        p.token !== tts.playToken ||
+        p.index !== tts.index
+      )
+        return;
+
       if (msg.type === "tts.playing") {
-        const p = msg.payload || {};
-        if (!tts.playing) return;
-        if (p.signature !== sig()) return;
-        if (p.token !== tts.playToken) return;
-        if (p.index !== tts.index) return;
         setStatus(); // show Playing x/y
         highlightReading();
-        // chrome.runtime.sendMessage({
-        //   type: "tts.positionChanged",
-        //   payload: { index: tts.index }
-        // });
         return;
       }
 
       if (msg.type === "tts.ended") {
-        const p = msg.payload || {};
-        if (!tts.playing) return;
-        if (p.signature !== sig()) return;
-        if (p.token !== tts.playToken) return;
-        if (p.index !== tts.index) return;
         if (p.reason && p.reason !== "natural") {
-          stopPlayback(notifyBackground=false);
+          stopPlayback((notifyBackground = false));
           return;
-       }
+        }
         const next = tts.index + 1;
         if (next < tts.segments.length) {
           let pause = SERVERS.get(tts.server).pause || 0;
@@ -317,19 +319,8 @@
         return;
       }
       if (msg.type === "tts.error") {
-        const p = msg.payload || {};
-        if (!tts.playing) return;
-        if (p.signature !== sig()) return;
-        if (p.token !== tts.playToken) return;
-        if (p.index !== tts.index) return;
-
-        console.log("TTS error:", p.error || p);
-        setStatus();
+        setStatus("TTS error:", p.error);
         stopPlayback();
-        return;
-      }
-      if (msg.type === "content.tts.cleanup") {
-        cleanup();
         return;
       }
     });
@@ -762,35 +753,37 @@
       contentHost.style.setProperty("--rv-maxw", `${prefs.maxWidth}px`);
       savePrefs();
     });
-    overlay.querySelector("#rv-voices-refresh").addEventListener("click", async (e) => {
-      if (!tts.server) return;
-      const btn = e.target;
-      try {
-        setStatus("Refreshing voices...");
-        btn.disabled = true;
-        const r = await chrome.runtime.sendMessage({
-          type: "tts.refreshVoices",
-          payload: { server: tts.server },
-        });
-        if (!r || !r.ok) throw new Error(r?.error || "Refresh failed");
+    overlay
+      .querySelector("#rv-voices-refresh")
+      .addEventListener("click", async (e) => {
+        if (!tts.server) return;
+        const btn = e.target;
+        try {
+          setStatus("Refreshing voices...");
+          btn.disabled = true;
+          const r = await chrome.runtime.sendMessage({
+            type: "tts.refreshVoices",
+            payload: { server: tts.server },
+          });
+          if (!r || !r.ok) throw new Error(r?.error || "Refresh failed");
 
-        const cfg = SERVERS.get(tts.server);
-        cfg.voices = r.voices;
+          const cfg = SERVERS.get(tts.server);
+          cfg.voices = r.voices;
 
-        // Re-render dropdown and keep current selection if possible
-        const keep = tts.voice;
-        updateVoiceUI();
-        if (keep && cfg.voices.includes(keep)) {
-          tts.voiceEl.value = keep;
-          tts.voice = keep;
+          // Re-render dropdown and keep current selection if possible
+          const keep = tts.voice;
+          updateVoiceUI();
+          if (keep && cfg.voices.includes(keep)) {
+            tts.voiceEl.value = keep;
+            tts.voice = keep;
+          }
+          setStatus("Voices refreshed");
+        } catch {
+          setStatus("Refresh failed");
+        } finally {
+          btn.disabled = false;
         }
-        setStatus("Voices refreshed");
-      } catch {
-        setStatus("Refresh failed");
-      } finally {
-        btn.disabled = false;
-      }
-    });
+      });
 
     document.addEventListener("keyup", onKey, true);
     document.addEventListener("copy", onCopy, true);

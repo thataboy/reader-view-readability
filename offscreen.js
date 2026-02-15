@@ -234,9 +234,10 @@ function buildBody(serverId, { text, voice, speed, lang }) {
   };
 }
 
-async function fetchVoices(serverId) {
-  const r = await fetch(endpointFor(serverId, "/voices"));
-  if (!r.ok) throw new Error(`/voices failed: ${r.status} ${r.statusText}`);
+async function fetchVoices(serverId, refresh) {
+  const path = '/voices' + (refresh ? '/refresh' : '');
+  const r = await fetch(endpointFor(serverId, path));
+  if (!r.ok) throw new Error(`${path} failed: ${r.status} ${r.statusText}`);
   const j = await r.json();
   return j.voices;
 }
@@ -245,7 +246,8 @@ async function fetchVoices(serverId) {
 // Audio utilities
 // --------------------------
 
-const BUFFER_SIZE = navigator.userAgent.includes("Mac OS X") ? 2048 : 4096;
+const isAndroid = navigator.userAgent.includes("ndroid");
+const BUFFER_SIZE = isAndroid ? 8192 : 2048;
 
 function pcm16leToFloat32(u8) {
   const i16 = new Int16Array(u8.buffer, u8.byteOffset, u8.byteLength / 2);
@@ -634,7 +636,7 @@ async function streamPlayAndCache(tabId, st, signature, token, index) {
   const lang = st.lang;
 
   const cfg = SERVERS.get(serverId);
-  const streamable = cfg?.streamable ?? true;
+  const streamable = (cfg?.streamable ?? true);  // && !isAndroid;
 
   if (!streamable) {
     // fallback: synthesize then play
@@ -1129,11 +1131,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === "offscreen.tts.listVoices") {
+  if (msg.type === "offscreen.tts.listVoices" || msg.type === "offscreen.tts.refreshVoices") {
     (async () => {
       try {
         const serverId = msg.payload?.server;
-        const voices = await fetchVoices(serverId);
+        const voices = await fetchVoices(serverId, msg.type === "offscreen.tts.refreshVoices");
         sendResponse?.({ ok: true, voices });
       } catch (e) {
         sendResponse?.({ ok: false, error: String(e && (e.message || e)) });

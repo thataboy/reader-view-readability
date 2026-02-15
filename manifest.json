@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Readability + TTS",
-  "version": "1.0.0",
-  "description": "Reader view using readability.js + TTS",
+  "name": "Readable-TTS",
+  "version": "1.1.0",
+  "description": "Readability + TTS",
   "permissions": [
     "activeTab",
     "scripting",
@@ -12,7 +12,7 @@
     "webNavigation"
   ],
   "action": {
-    "default_title": "Readability",
+    "default_title": "Readable-TTS",
     "default_icon": {
       "128": "icons/readable.png"
     }

@@ -498,6 +498,16 @@
           <div id="rv-tts">
             <div id="rv-servers"></div>
             <select id="rv-voice" title="Voice"></select>
+            <button class="rv-btn" id="rv-voices-refresh" title="Refresh voices">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16"
+              fill="none" stroke="white" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true" focusable="false">
+              <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.2-5.2"/>
+              <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.2 5.2"/>
+              <path d="M21 3v6h-6"/>
+              <path d="M3 21v-6h6"/>
+            </svg>
+            </button>
             <div id="rv-rating-control" class="rv-rating-control" title="Rate the selected voice (0-3 stars)"></div>
             <label class="rv-inline" title="Speed">
             <input id="rv-speed" type="range" min="0.7" max="1.5" step="0.05" value="1.0" />
@@ -751,6 +761,35 @@
       prefs.maxWidth = Math.max(520, prefs.maxWidth - 40);
       contentHost.style.setProperty("--rv-maxw", `${prefs.maxWidth}px`);
       savePrefs();
+    });
+    overlay.querySelector("#rv-voices-refresh").addEventListener("click", async (e) => {
+      if (!tts.server) return;
+      const btn = e.target;
+      try {
+        setStatus("Refreshing voices...");
+        btn.disabled = true;
+        const r = await chrome.runtime.sendMessage({
+          type: "tts.refreshVoices",
+          payload: { server: tts.server },
+        });
+        if (!r || !r.ok) throw new Error(r?.error || "Refresh failed");
+
+        const cfg = SERVERS.get(tts.server);
+        cfg.voices = r.voices;
+
+        // Re-render dropdown and keep current selection if possible
+        const keep = tts.voice;
+        updateVoiceUI();
+        if (keep && cfg.voices.includes(keep)) {
+          tts.voiceEl.value = keep;
+          tts.voice = keep;
+        }
+        setStatus("Voices refreshed");
+      } catch {
+        setStatus("Refresh failed");
+      } finally {
+        btn.disabled = false;
+      }
     });
 
     document.addEventListener("keyup", onKey, true);

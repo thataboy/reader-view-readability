@@ -10,6 +10,7 @@ async function injectAndToggle(tabId) {
     console.error("Reader View error:", e);
   }
 }
+
 chrome.action.onClicked.addListener(async (tab) => {
   if (tab && tab.id) injectAndToggle(tab.id);
 });
@@ -147,13 +148,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === "tts.listVoices") {
+  if (msg.type === "tts.listVoices" || msg.type === "tts.refreshVoices") {
     (async () => {
       try {
         if (!tabId) return sendResponse?.({ ok: false, error: "No sender tab" });
         await ensureOffscreenDocument();
         const r = await chrome.runtime.sendMessage({
-          type: "offscreen.tts.listVoices",
+          type: `offscreen.${msg.type}`,
           payload: { tabId, ...(msg.payload || {}) }
         });
         sendResponse?.(r || { ok: false, error: "No response" });

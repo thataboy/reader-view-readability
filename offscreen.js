@@ -300,48 +300,32 @@ function tryParseWavHeader(u8) {
   };
 }
 
-// Streaming WAV player (mobile friendly)
-//
-// Replaces ScriptProcessor streaming. We assume WAV only for streaming.
-// The server may send a WAV header first, then PCM16LE audio data.
-//
-// Implementation is based on demo.html's StreamingWavPlayer, but uses the
-// robust tryParseWavHeader() above (handles non-44-byte headers).
-class StreamingWavPlayer {
-  constructor() {
+class StreamingPlayer {
+  constructor(defaultSampleRate = null) {
     const AudioCtx = self.AudioContext || self.webkitAudioContext;
-    // 'playback' latencyHint encourages mobile OS to use the higher quality path.
     this.ctx = new AudioCtx({ latencyHint: "playback" });
 
-    this.headerBuf = [];
-    this.headerLen = 0;
-    this.header = null; // {numChannels, sampleRate, bitsPerSample, dataOffset}
+    // If null, we'll wait for a WAV header to define it
+    this.sampleRate = defaultSampleRate;
+    this.numChannels = 1;
 
     this.pcmData = new Uint8Array(0);
     this.nextStartTime = 0;
     this.minBufferSize = 16384;
-    this.firstAudioPlayed = false;
     this.didStartPlayback = false;
     this._lastSrc = null;
+
+    // Header parsing state
+    this.headerFound = false;
+    this.headerBuf = [];
+    this.headerLen = 0;
   }
 
   async start() {
     if (this.ctx.state === "suspended") await this.ctx.resume();
   }
 
-  // Bytes we have scheduled + bytes waiting to be scheduled.
-  bufferedSeconds() {
-    if (!this.header) return 0;
-    const bytesPerSecond =
-      this.header.sampleRate * this.header.numChannels * 2;
-    const scheduled = Math.max(0, this.nextStartTime - this.ctx.currentTime);
-    const queued = bytesPerSecond
-      ? this.pcmData.length / bytesPerSecond
-      : 0;
-    return scheduled + queued;
-  }
-
-  _appendPcmData(newData) {
+  _appendBytes(newData) {
     if (!newData || newData.length === 0) return;
     const merged = new Uint8Array(this.pcmData.length + newData.length);
     merged.set(this.pcmData, 0);
@@ -349,73 +333,54 @@ class StreamingWavPlayer {
     this.pcmData = merged;
   }
 
-  _ensureHeaderParsed() {
-    if (this.header) return;
-    if (this.headerLen < 12) return;
+  async addChunk(chunk) {
+    if (!chunk || chunk.length === 0) return;
 
-    const tmp = new Uint8Array(this.headerLen);
-    let off = 0;
-    for (const h of this.headerBuf) {
-      tmp.set(h, off);
-      off += h.length;
+    // Phase 1: Determine Audio Parameters
+    if (!this.sampleRate && !this.headerFound) {
+      this.headerBuf.push(chunk);
+      this.headerLen += chunk.length;
+
+      const tmp = new Uint8Array(this.headerLen);
+      let off = 0;
+      for (const h of this.headerBuf) { tmp.set(h, off); off += h.length; }
+
+      const parsed = tryParseWavHeader(tmp);
+      if (parsed) {
+        this.sampleRate = parsed.sampleRate;
+        this.headerFound = true;
+        // Seed PCM data with anything following the WAV header
+        this._appendBytes(tmp.subarray(parsed.dataOffset));
+        this.headerBuf = []; // clear memory
+      } else if (this.headerLen > 1024) {
+        // Fallback: If we've seen 1KB and no WAV header, it's likely raw
+        // but we don't have a sample rate. This shouldn't happen with the route logic.
+        throw new Error("Could not determine sample rate from stream");
+      }
+    } else {
+      // Phase 2: Standard PCM ingestion
+      this._appendBytes(chunk);
     }
 
-    const parsed = tryParseWavHeader(tmp);
-    if (!parsed) return;
-
-    if (parsed.audioFormat !== 1) throw new Error("WAV: only PCM supported");
-    if (parsed.bitsPerSample !== 16)
-      throw new Error("WAV: only 16-bit PCM supported");
-    // Stereo is ok, but most TTS is mono.
-    if (parsed.numChannels !== 1 && parsed.numChannels !== 2)
-      throw new Error("WAV: only mono/stereo supported");
-
-    this.header = {
-      numChannels: parsed.numChannels,
-      sampleRate: parsed.sampleRate,
-      bitsPerSample: parsed.bitsPerSample,
-      dataOffset: parsed.dataOffset,
-    };
-
-    // Any bytes after dataOffset are PCM.
-    const pcmStart = tmp.subarray(parsed.dataOffset);
-    if (pcmStart.length > 0) this._appendPcmData(pcmStart);
-
-    // Clear header buffers to free memory.
-    this.headerBuf = [];
-    this.headerLen = 0;
+    if (this.sampleRate) this._tryPlayBuffer();
   }
 
-  async _tryPlayBuffer() {
-    if (!this.header) return;
-    if (this.pcmData.length < this.minBufferSize) return;
+  _tryPlayBuffer() {
+    // Need 2 bytes for a single Int16 sample
+    const bytesPerFrame = 2;
+    if (this.pcmData.length < (this.didStartPlayback ? bytesPerFrame : this.minBufferSize)) return;
 
-    const numChannels = this.header.numChannels;
-    const sampleRate = this.header.sampleRate;
-    const bytesPerFrame = numChannels * 2;
     const framesToPlay = Math.floor(this.pcmData.length / bytesPerFrame);
     const bytesToPlay = framesToPlay * bytesPerFrame;
-    if (bytesToPlay <= 0) return;
-
     const dataToPlay = this.pcmData.subarray(0, bytesToPlay);
     this.pcmData = this.pcmData.subarray(bytesToPlay);
 
-    const audioBuffer = this.ctx.createBuffer(
-      numChannels,
-      framesToPlay,
-      sampleRate,
-    );
-    const int16 = new Int16Array(
-      dataToPlay.buffer,
-      dataToPlay.byteOffset,
-      framesToPlay * numChannels,
-    );
+    const audioBuffer = this.ctx.createBuffer(1, framesToPlay, this.sampleRate);
+    const int16 = new Int16Array(dataToPlay.buffer, dataToPlay.byteOffset, framesToPlay);
+    const out = audioBuffer.getChannelData(0);
 
-    for (let ch = 0; ch < numChannels; ch++) {
-      const out = audioBuffer.getChannelData(ch);
-      for (let i = 0; i < framesToPlay; i++) {
-        out[i] = int16[i * numChannels + ch] / 32768;
-      }
+    for (let i = 0; i < framesToPlay; i++) {
+      out[i] = int16[i] / 32768;
     }
 
     const src = this.ctx.createBufferSource();
@@ -427,259 +392,36 @@ class StreamingWavPlayer {
     src.start(startTime);
 
     this._lastSrc = src;
-
-    if (!this.didStartPlayback) this.didStartPlayback = true;
-
-    // Allow a callback to fire on first audible playback (used by UI elsewhere).
-    if (!this.firstAudioPlayed && self.firstAudioCallback) {
-      this.firstAudioPlayed = true;
-      try {
-        self.firstAudioCallback();
-      } catch {}
-    }
-
     this.nextStartTime = startTime + audioBuffer.duration;
-
-    // If we still have enough buffered, keep scheduling quickly.
-    if (this.pcmData.length >= this.minBufferSize) {
-      setTimeout(() => this._tryPlayBuffer(), 10);
-    }
+    this.didStartPlayback = true;
   }
-
-  async addChunk(chunk) {
-    if (!chunk || chunk.length === 0) return;
-
-    // Header parse phase
-    if (!this.header) {
-      this.headerBuf.push(chunk);
-      this.headerLen += chunk.length;
-      // Don't let header grow without bound in pathological cases.
-      if (this.headerLen > 256 * 1024) {
-        throw new Error("WAV header too large / invalid stream");
-      }
-      this._ensureHeaderParsed();
-      await this._tryPlayBuffer();
-      return;
-    }
-
-    // PCM phase
-    this._appendPcmData(chunk);
-    await this._tryPlayBuffer();
-  }
-
 
   async finish({ timeoutMs = 15000 } = {}) {
-    // Flush any tail bytes that are smaller than minBufferSize.
-    // At end of stream we want to schedule everything we have.
-    if (!this.header) return;
+    if (!this.sampleRate) return;
 
-    this.minBufferSize = 1;
+    // Flush the remainder
+    this.minBufferSize = 2;
+    this._tryPlayBuffer();
 
-    // Schedule until we've consumed all whole frames.
-    const bytesPerFrame = this.header.numChannels * 2;
-    while (this.pcmData.length >= bytesPerFrame) {
-      await this._tryPlayBuffer();
-      // _tryPlayBuffer drains all currently available whole frames, so one loop is usually enough,
-      // but keep this as a safety in case future changes schedule partial buffers.
-      if (this.pcmData.length < bytesPerFrame) break;
-    }
-
-    // Wait for last scheduled source to end (more reliable than polling bufferedSeconds).
     if (!this._lastSrc) return;
 
     await new Promise((resolve) => {
-      let done = false;
-      const t = setTimeout(() => {
-        if (done) return;
-        done = true;
+      const t = setTimeout(resolve, timeoutMs);
+      this._lastSrc.onended = () => {
+        clearTimeout(t);
         resolve();
-      }, timeoutMs);
-
-      try {
-        this._lastSrc.addEventListener("ended", () => {
-          if (done) return;
-          done = true;
-          clearTimeout(t);
-          resolve();
-        }, { once: true });
-      } catch {
-        // If addEventListener fails, fall back to time based wait.
-        // Use nextStartTime as an estimate and still enforce timeoutMs above.
-        const ms = Math.max(0, Math.ceil((this.nextStartTime - this.ctx.currentTime) * 1000) + 100);
-        setTimeout(() => {
-          if (done) return;
-          done = true;
-          clearTimeout(t);
-          resolve();
-        }, ms);
-      }
+      };
     });
   }
 
   async stop() {
-    try {
-      if (this.ctx.state === "suspended") await this.ctx.resume();
-    } catch {}
     try {
       if (this.ctx.state !== "closed") await this.ctx.close();
     } catch {}
   }
 }
 
-
-class StreamingPcm16Player {
-  constructor({ sampleRate }) {
-    const AudioCtx = self.AudioContext || self.webkitAudioContext;
-    this.ctx = new AudioCtx({ latencyHint: "playback", sampleRate });
-
-    this.sampleRate = sampleRate;
-    this.pcmData = new Uint8Array(0); // raw pcm16le bytes
-    this.nextStartTime = 0;
-    this.minBufferSize = 16384;
-    this.firstAudioPlayed = false;
-    this.didStartPlayback = false;
-    this._lastSrc = null;
-  }
-
-  async start() {
-    if (this.ctx.state === "suspended") await this.ctx.resume();
-  }
-
-  _appendBytes(u8) {
-    if (!u8 || u8.length === 0) return;
-    const merged = new Uint8Array(this.pcmData.length + u8.length);
-    merged.set(this.pcmData, 0);
-    merged.set(u8, this.pcmData.length);
-    this.pcmData = merged;
-  }
-
-  addChunk(u8) {
-    // Expect pcm16le mono
-    this._appendBytes(u8);
-    this.tryPlayBuffer();
-  }
-
-  tryPlayBuffer() {
-    if (this.didStartPlayback && this.ctx.state === "suspended") return;
-
-    // Need at least 2 bytes per sample.
-    const alignedLen = this.pcmData.length - (this.pcmData.length % 2);
-    if (alignedLen < 2) return;
-
-    // Respect minBufferSize during streaming to reduce overhead,
-    // but we'll lower this in finish() to flush the tail.
-    const playLen = Math.min(alignedLen, Math.max(this.minBufferSize, 2));
-    if (alignedLen < this.minBufferSize && !this.firstAudioPlayed) return;
-    if (alignedLen < this.minBufferSize && this.firstAudioPlayed) return;
-
-    const dataToPlay = this.pcmData.subarray(0, playLen);
-    this.pcmData = this.pcmData.subarray(playLen);
-
-    const framesToPlay = dataToPlay.length / 2;
-
-    const audioBuffer = this.ctx.createBuffer(1, framesToPlay, this.sampleRate);
-    const int16 = new Int16Array(
-      dataToPlay.buffer,
-      dataToPlay.byteOffset,
-      framesToPlay,
-    );
-    const out = audioBuffer.getChannelData(0);
-    for (let i = 0; i < framesToPlay; i++) out[i] = int16[i] / 32768;
-
-    const source = this.ctx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(this.ctx.destination);
-
-    const now = this.ctx.currentTime;
-    if (!this.didStartPlayback) {
-      this.nextStartTime = Math.max(now + 0.02, this.nextStartTime);
-      this.didStartPlayback = true;
-    } else {
-      this.nextStartTime = Math.max(this.nextStartTime, now + 0.002);
-    }
-
-    source.start(this.nextStartTime);
-    this._lastSrc = source;
-    this.nextStartTime += audioBuffer.duration;
-
-    this.firstAudioPlayed = true;
-  }
-
-  async finish({ timeoutMs = 15000 } = {}) {
-    // Flush remaining tail: drop minBufferSize, schedule whatever is left.
-    this.minBufferSize = 2;
-
-    // Keep scheduling until no more whole samples remain.
-    // This is not a "drain loop"; it's just flushing remaining queued bytes
-    // into scheduled AudioBufferSourceNodes.
-    while (true) {
-      const alignedLen = this.pcmData.length - (this.pcmData.length % 2);
-      if (alignedLen < 2) break;
-
-      const chunkLen = alignedLen; // schedule all remaining
-      const dataToPlay = this.pcmData.subarray(0, chunkLen);
-      this.pcmData = this.pcmData.subarray(chunkLen);
-
-      const framesToPlay = dataToPlay.length / 2;
-      const audioBuffer = this.ctx.createBuffer(1, framesToPlay, this.sampleRate);
-      const int16 = new Int16Array(
-        dataToPlay.buffer,
-        dataToPlay.byteOffset,
-        framesToPlay,
-      );
-      const out = audioBuffer.getChannelData(0);
-      for (let i = 0; i < framesToPlay; i++) out[i] = int16[i] / 32768;
-
-      const source = this.ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(this.ctx.destination);
-
-      const now = this.ctx.currentTime;
-      if (!this.didStartPlayback) {
-        this.nextStartTime = Math.max(now + 0.02, this.nextStartTime);
-        this.didStartPlayback = true;
-      } else {
-        this.nextStartTime = Math.max(this.nextStartTime, now + 0.002);
-      }
-
-      source.start(this.nextStartTime);
-      this._lastSrc = source;
-      this.nextStartTime += audioBuffer.duration;
-      this.firstAudioPlayed = true;
-
-      // If the remaining data was tiny, break after scheduling.
-      if (this.pcmData.length < 2) break;
-    }
-
-    // Wait for the last scheduled source to end.
-    const last = this._lastSrc;
-    if (!last) return;
-
-    await new Promise((resolve) => {
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        resolve();
-      };
-      try {
-        last.addEventListener("ended", finish, { once: true });
-      } catch {
-        // Fallback: resolve soon if event listener fails
-        setTimeout(finish, 0);
-      }
-      setTimeout(finish, timeoutMs);
-    });
-  }
-
-  async stop() {
-    try {
-      await this.ctx.close();
-    } catch {}
-  }
-}
-
-class BufferSourcePlayer {
+class CachePlayer {
   constructor({ ctx }) {
     this.ctx = ctx;
     this.gain = this.ctx.createGain();
@@ -900,54 +642,32 @@ async function synthesizeToCache(st, key, index) {
 
 async function streamPlayAndCache(tabId, st, signature, token, index) {
   const key = cacheKey(signature, index);
-
-  // If a synthesize prefetch is in-flight for this key, wait and then play.
   if (st.inFlight.has(key)) {
     await st.inFlight.get(key);
-    if (st.cache.has(key)) {
-      await playFromCache(tabId, st, signature, token, index);
-      return;
-    }
+    if (st.cache.has(key)) return await playFromCache(tabId, st, signature, token, index);
   }
 
   const text = st.textByIndex.get(index) || "";
   const serverId = st.server;
-  const voice = st.voice;
-  const speed = st.speed;
-  const lang = st.lang;
-
   const cfg = SERVERS.get(serverId);
-  const streamable = (cfg?.streamable ?? true);  // && !isAndroid;
+  const body = buildBody(serverId, { text, voice: st.voice, speed: st.speed, lang: st.lang });
 
-  if (!streamable) {
-    // fallback: synthesize then play
-    await synthesizeToCache(st, key, index);
-    await playFromCache(tabId, st, signature, token, index);
-    return;
-  }
-
-  const body = buildBody(serverId, { text, voice, speed, lang });
   if (isTooShortForServer(cfg, body)) {
     st.cache.set(key, { audioBuffer: makeSilenceBuffer(st, 30) });
     return;
   }
 
-  const url = endpointFor(serverId, "/stream");
+  if (!(cfg?.streamable ?? true)) {
+    await synthesizeToCache(st, key, index);
+    return await playFromCache(tabId, st, signature, token, index);
+  }
 
   const ac = new AbortController();
   st.aborts.set(key, ac);
-
   await stopCurrent("superseded");
 
-  let player = null;
-  current = { tabId, key, signature, token, index, abort: ac, player };
-
-  let notifiedPlaying = false;
-  const chunks = [];
-  let total = 0;
-
   try {
-    const r = await fetch(url, {
+    const r = await fetch(endpointFor(serverId, "/stream"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -955,124 +675,77 @@ async function streamPlayAndCache(tabId, st, signature, token, index) {
     });
 
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-
-    const ctype = (r.headers.get("content-type") || "").toLowerCase();
-    const isWav =
-      ctype.includes("audio/wav") ||
-      ctype.includes("audio/x-wav") ||
-      ctype.includes("wav");
     if (!r.body) throw new Error("Missing response body stream");
 
-    // Stream supports either WAV (preferred) or raw PCM16LE mono.
-    // For raw PCM, infer sampleRate from the Content-Type parameter: rate=(\d+)
-    let streamMode = isWav ? "wav" : "pcm";
-    let pcmSampleRate = null;
+    const ctype = (r.headers.get("content-type") || "").toLowerCase();
+    const isWav = ctype.includes("wav");
+
+    // Determine sample rate if it's raw PCM
+    let sampleRate = null;
     if (!isWav) {
       const m = ctype.match(/rate\s*=\s*(\d+)/);
-      if (!m) {
-        throw new Error(`Raw PCM stream missing rate=... in content-type: ${ctype}`);
-      }
-      pcmSampleRate = parseInt(m[1], 10);
-      if (!Number.isFinite(pcmSampleRate) || pcmSampleRate <= 0) {
-        throw new Error(`Invalid PCM sample rate in content-type: ${ctype}`);
-      }
+      sampleRate = m ? parseInt(m[1], 10) : null;
     }
 
-    const reader = r.body.getReader();
-
-    // Create WAV streaming player
-    player = streamMode === "wav" ? new StreamingWavPlayer() : new StreamingPcm16Player({ sampleRate: pcmSampleRate });
-    current.player = player;
+    const player = new StreamingPlayer(sampleRate);
+    current = { tabId, key, signature, token, index, abort: ac, player };
     await player.start();
+
+    const reader = r.body.getReader();
+    const chunks = [];
+    let totalLen = 0;
 
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      if (!value || value.length === 0) continue;
 
-      // stop / superseded
-      if (
-        !current ||
-        current.tabId !== tabId ||
-        current.token !== token ||
-        current.signature !== signature
-      ) {
-        try {
-          ac.abort();
-        } catch {}
+      // Abort if context changed
+      if (!current || current.token !== token) {
+        ac.abort();
         return;
       }
 
-      // Keep a copy for caching/decoding later.
       chunks.push(value);
-      total += value.length;
+      totalLen += value.length;
+      await player.addChunk(value);
 
-      // Stream into player.
-      await current.player.addChunk(value);
-
-      if (!notifiedPlaying && current.player.didStartPlayback) {
-        notifiedPlaying = true;
+      if (player.didStartPlayback && !current.notified) {
+        current.notified = true;
         emit(tabId, "tts.playing", { signature, token, index });
         st.prefetchGateOpened = true;
         ensurePrefetchLoop(st);
       }
     }
 
-    // Ensure playing event even if we buffered quickly
-    if (!notifiedPlaying) {
-      notifiedPlaying = true;
-      emit(tabId, "tts.playing", { signature, token, index });
-      st.prefetchGateOpened = true;
-      ensurePrefetchLoop(st);
-    }
-
-    // Cache what we downloaded (full WAV), decoded into an AudioBuffer.
-    if (total > 0) {
-      const allU8 = new Uint8Array(total);
+    // Decode full stream to cache for future replays
+    if (totalLen > 0) {
+      const fullU8 = new Uint8Array(totalLen);
       let off = 0;
-      for (const c of chunks) {
-        allU8.set(c, off);
-        off += c.length;
-      }
+      for (const c of chunks) { fullU8.set(c, off); off += c.length; }
 
       const ctx = getDecodeCtx(st);
-      let audioBuffer = null;
+      let audioBuffer;
 
-      if (streamMode === "wav") {
-        audioBuffer = await ctx.decodeAudioData(allU8.buffer.slice(0));
+      if (isWav) {
+        audioBuffer = await ctx.decodeAudioData(fullU8.buffer.slice(0));
       } else {
-        // Raw PCM16LE mono
-        const aligned = allU8.length - (allU8.length % 2);
-        const frames = aligned / 2;
-        audioBuffer = ctx.createBuffer(1, frames, pcmSampleRate);
-
-        const i16 = new Int16Array(allU8.buffer, 0, frames);
+        // Handle raw PCM cache storage (assume mono)
+        const frames = Math.floor(fullU8.length / 2);
+        audioBuffer = ctx.createBuffer(1, frames, sampleRate || 22050);
+        const i16 = new Int16Array(fullU8.buffer, 0, frames);
         const out = audioBuffer.getChannelData(0);
         for (let i = 0; i < frames; i++) out[i] = i16[i] / 32768;
       }
-
-      if (audioBuffer) st.cache.set(key, { audioBuffer });
+      st.cache.set(key, { audioBuffer });
     }
 
-
-    // Wait for final tail to play out (event-driven, no drain polling).
-    try {
-      await player.finish();
-    } catch {}
+    await player.finish();
   } catch (e) {
-    emit(tabId, "tts.error", {
-      signature,
-      token,
-      index,
-      error: String(e && (e.message || e)),
-    });
+    emit(tabId, "tts.error", { signature, token, index, error: String(e.message || e) });
     await stopCurrent("error");
   } finally {
     st.aborts.delete(key);
-  }
-
-  if (current && current.tabId === tabId && current.token === token) {
-    await stopCurrent("natural");
+    if (current?.token === token) await stopCurrent("natural");
   }
 }
 
@@ -1086,7 +759,7 @@ async function playFromCache(tabId, st, signature, token, index) {
   const ac = new AbortController();
   st.aborts.set(key, ac);
   const ctx = getDecodeCtx(st);
-  const player = new BufferSourcePlayer({ ctx });
+  const player = new CachePlayer({ ctx });
   current = { tabId, key, signature, token, index, abort: ac, player };
 
   await player.startFromAudioBuffer(entry.audioBuffer);

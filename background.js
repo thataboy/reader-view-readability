@@ -4,7 +4,7 @@ async function injectAndToggle(tabId) {
     await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
     try {
       await chrome.scripting.executeScript({ target: { tabId }, files: ["readability.js"] });
-    } catch (_) {}
+    } catch {}
     await chrome.tabs.sendMessage(tabId, { type: "toggleReader" });
   } catch (e) {
     console.error("Reader View error:", e);
@@ -28,7 +28,7 @@ async function ensureOffscreenDocument() {
       const exists = await chrome.offscreen.hasDocument();
       if (exists) return;
     }
-  } catch (_) {
+  } catch {
     // Ignore and fall through to create; older Chrome may not support hasDocument().
   }
 
@@ -60,25 +60,19 @@ async function ensureOffscreenDocument() {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   // Best-effort cleanup of per-tab offscreen state.
-  try {
-    chrome.runtime.sendMessage({
-      type: "offscreen.tts.cleanupTab",
-      payload: { tabId }
-    });
-  } catch {}
+  chrome.runtime.sendMessage({
+    type: "offscreen.tts.cleanupTab", payload: { tabId }
+  }).catch()
 });
 
 // Stop TTS when a tab navigates (Back, forward, link click, refresh, etc.)
 // This keeps offscreen playback aligned with visible page state.
 chrome.webNavigation.onCommitted.addListener(
   (details) => {
-    try {
-      // await ensureOffscreen();
-      chrome.runtime.sendMessage({
-        type: "offscreen.tts.cleanup",
-        payload: { tabId: details.tabId },
-      });
-    } catch {}
+    chrome.runtime.sendMessage({
+      type: "offscreen.tts.cleanup",
+      payload: { tabId: details.tabId },
+    }).catch()
   }
 );
 
@@ -123,9 +117,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           payload: { tabId }
         });
         sendResponse?.({ ok: true });
-      } catch (e) {
-        sendResponse?.({ ok: false, error: String(e && (e.message || e)) });
-      }
+      } catch {}
     })();
     return true;
   }
@@ -139,9 +131,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           payload: { tabId }
         });
         sendResponse?.({ ok: true });
-      } catch (e) {
-        sendResponse?.({ ok: false, error: String(e && (e.message || e)) });
-      }
+      } catch {}
     })();
     return true;
   }

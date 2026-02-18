@@ -73,7 +73,7 @@ chrome.tabs.onRemoved.addListener(async (tabId, _removeInfo) => {
   orphaned.add(tabId);
   if (await hasOffscreen()) {
     chrome.runtime.sendMessage({
-      type: "offscreen.tts.cleanupTab",
+      type: "offscreen.tts.cleanup",
       payload: { tabId }
     }).catch();
   }
@@ -85,7 +85,7 @@ chrome.webNavigation.onCommitted.addListener(async (details) => {
   orphaned.add(details.tabId);
   if (await hasOffscreen()) {
     chrome.runtime.sendMessage({
-      type: "offscreen.tts.cleanupTab",
+      type: "offscreen.tts.cleanup",
       payload: { tabId: details.tabId },
     }).catch();
   }

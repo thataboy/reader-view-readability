@@ -23,16 +23,12 @@
 #rv-content {
     max-width: var(--rv-maxw, 860px);
     margin: 24px auto;
-    padding: 4px 16px;
+    padding: 4px 8px;
     font-family: var(--rv-font-family) !important;
 }
 #rv-content a[href] {
     text-decoration: underline !important;
     opacity: 0.9 !important;
-}
-#rv-content svg {
-    width: 32px;
-    height: auto;
 }
 #rv-content p {
     margin: 1em 0;
@@ -155,6 +151,7 @@
 #rv-surface::-webkit-scrollbar-thumb {
     background: #888;
     border-radius: 6px;
+    min-height: 30px;
     border: 1px solid #666;
     background-clip: content-box;
 }
@@ -201,7 +198,7 @@ html.rv-active body {
 }
 #rv-toolbar input {
     vertical-align: middle !important;
-    margin: auto 4px !important;
+    margin: auto 0 auto 6px !important;
     padding: 0 !important;
 }
 #rv-toolbar select {
@@ -215,7 +212,12 @@ html.rv-active body {
     margin: 0 4px 0 2px;
     padding: 0;
     display: inline-flex;
-    vertical-align: bottom !important;
+    vertical-align: middle !important;
+}
+#rv-toolbar label[for] {
+    cursor: pointer;
+    font-size: 13px;
+    font-variant: small-caps;
 }
 #rv-tts-status,
 #rv-speed-label {

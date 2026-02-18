@@ -46,25 +46,18 @@ const SERVERS = new Map([
   ],
   [
     Server.POCKET,
-    { port: 9800, min_len: 2, sanitizer: sanitizePocket, streamable: true },
+    { port: 9800, min_len: 1, sanitizer: sanitizePocket, streamable: true },
   ],
   [
     Server.CANDLE,
     {
-      port: 9900,
-      min_len: 2,
-      sanitizer: sanitizePocket,
-      streamable: true,
-      extra_params: { model: "pocket-tts" },
+      port: 9900, min_len: 1, sanitizer: sanitizePocket, streamable: true,
     },
   ],
   [
     Server.MLX,
     {
-      port: 9700,
-      min_len: 2,
-      sanitizer: sanitizePocket,
-      streamable: false,
+      port: 9700, min_len: 1, sanitizer: sanitizePocket, streamable: false,
     },
   ],
 ]);
@@ -134,11 +127,11 @@ function sanitizePocket(text) {
   return text
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
-    .replace(/[[\]]/g, "")
+    .replace(/[[\]!]/g, "")
     .replace(/(\d)\.(\d)/g, '$1 point $2')
     .replace(/([a-z]{2,3})\.([a-z]{2,3}\d)/g, '$1 dot $2')
-    // remove extraneous punctuation after . ? !
-    .replace(/([\.\?!])[^\s\p{L}\p{N}]+/gu, '$1 ')
+    // remove extraneous punctuation after . ?
+    .replace(/([\.\?])[^\s\p{L}\p{N}]+/gu, '$1 ')
     .replace(/\$\s?([\d,]+(?:\.\d{2})?)/g, '$1 dollars')
     // drop . from middle initial
     .replace(/\s([A-Z])\.\s/g, ' $1 ')
@@ -218,13 +211,13 @@ function buildBody(serverId, { text, voice, speed, lang }) {
   const cfg = SERVERS.get(serverId);
   if (!cfg) throw new Error("Unknown server");
 
-  let input = sanitizeCommon(text)
+  text = sanitizeCommon(text)
   const sanitizer = cfg.sanitizer;
-  if (sanitizer) input = sanitizer(input);
-  input = expandAbbreviations(input)
+  if (sanitizer) text = sanitizer(text);
+  text = expandAbbreviations(text)
 
   return {
-    input,
+    text,
     voice,
     speed,
     lang,
@@ -527,17 +520,10 @@ function getDecodeCtx(st) {
   return st.decodeCtx;
 }
 
-function makeSilenceBuffer(st, ms = 30) {
-  const ctx = getDecodeCtx(st);
-  const frames = Math.max(1, Math.round((ctx.sampleRate * ms) / 1000));
-  // createBuffer is zero initialized, so this is silence.
-  return ctx.createBuffer(1, frames, ctx.sampleRate);
-}
-
 function isTooShortForServer(cfg, body) {
   const minLen = cfg.min_len ?? 0;
-  const inputLen = (body.input ?? "").length;
-  return minLen > 0 && inputLen < minLen;
+  const textLen = (body.text ?? "").length;
+  return minLen > 0 && textLen < minLen;
 }
 
 async function stopCurrent(reason = "stopped") {
@@ -594,10 +580,8 @@ async function synthesizeToCache(st, key, index) {
   if (!cfg) throw new Error("Unknown server");
 
   const body = buildBody(serverId, { text, voice, speed, lang });
-  if (isTooShortForServer(cfg, body)) {
-    st.cache.set(key, { audioBuffer: makeSilenceBuffer(st, 30) });
-    return;
-  }
+
+  if (isTooShortForServer(cfg, body)) throw new Error("Too short");
 
   const url = endpointFor(serverId, "/synthesize");
 
@@ -650,10 +634,7 @@ async function streamPlayAndCache(tabId, st, signature, token, index) {
   const cfg = SERVERS.get(serverId);
   const body = buildBody(serverId, { text, voice: st.voice, speed: st.speed, lang: st.lang });
 
-  if (isTooShortForServer(cfg, body)) {
-    st.cache.set(key, { audioBuffer: makeSilenceBuffer(st, 30) });
-    return;
-  }
+  if (isTooShortForServer(cfg, body)) throw new Error("Too short");
 
   if (!(cfg?.streamable ?? true)) {
     await synthesizeToCache(st, key, index);
@@ -682,7 +663,7 @@ async function streamPlayAndCache(tabId, st, signature, token, index) {
     let sampleRate = null;
     if (!isWav) {
       const m = ctype.match(/rate\s*=\s*(\d+)/);
-      sampleRate = m ? parseInt(m[1], 10) : null;
+      sampleRate = m ? parseInt(m[1], 10) : 44100;
     }
 
     const player = new StreamingPlayer(sampleRate);
@@ -891,12 +872,20 @@ async function handleWindow(p) {
           await streamPlayAndCache(tabId, st, signature, token, startIndex);
         }
       } catch (e) {
-        emit(tabId, "tts.error", {
-          signature,
-          token,
-          index: startIndex,
-          error: String(e && (e.message || e)),
-        });
+        if (e.message === "Too short")
+          emit(tabId, "tts.ended", {
+            signature,
+            token,
+            index: startIndex,
+            reason: "natural"
+          });
+        else
+          emit(tabId, "tts.error", {
+            signature,
+            token,
+            index: startIndex,
+            error: String(e && (e.message || e)),
+          });
       }
     })();
   }
@@ -978,14 +967,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === "offscreen.tts.cleanup") {
-    (async () => {
-      await handleCleanup(msg.payload?.tabId);
-      sendResponse?.({ ok: true });
-    })();
-    return true;
-  }
-
-  if (msg.type === "offscreen.tts.cleanupTab") {
     (async () => {
       await handleCleanup(msg.payload?.tabId);
       tabs.delete(msg.payload?.tabId);

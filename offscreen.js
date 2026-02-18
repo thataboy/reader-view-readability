@@ -11,12 +11,10 @@
 // Background is a message relay only.
 
 function emit(tabId, type, payload) {
-  try {
-    chrome.runtime.sendMessage({
-      type: "tts.forwardToTab",
-      payload: { tabId, type, payload },
-    });
-  } catch {}
+  chrome.runtime.sendMessage({
+    type: "tts.forwardToTab",
+    payload: { tabId, type, payload },
+  }).catch()
 }
 
 // --------------------------
@@ -302,7 +300,7 @@ function tryParseWavHeader(u8) {
 
 class StreamingPlayer {
   constructor(defaultSampleRate = null) {
-    const AudioCtx = self.AudioContext || self.webkitAudioContext;
+    const AudioCtx = self.AudioContext;
     this.ctx = new AudioCtx({ latencyHint: "playback" });
 
     // If null, we'll wait for a WAV header to define it
@@ -524,7 +522,7 @@ function cacheKey(signature, index) {
 
 function getDecodeCtx(st) {
   if (st.decodeCtx) return st.decodeCtx;
-  const AudioCtx = self.AudioContext || self.webkitAudioContext;
+  const AudioCtx = self.AudioContext;
   st.decodeCtx = new AudioCtx({ latencyHint: "playback" });
   return st.decodeCtx;
 }
@@ -919,15 +917,11 @@ async function handleWindow(p) {
 async function handleStop(tabId) {
   // Single global player, but stop should be scoped to the requesting tab.
   // If tabId is missing (non-tab context), treat as global stop.
-  if (current) {
-    if (tabId == null) {
+  if (current && (current.tabId === tabId || !tabId)) {
       await stopCurrent("stopped");
-    } else if (current.tabId === tabId) {
-      await stopCurrent("stopped");
-    } else {
-      // Another tab requested stop. Do not stop the currently playing tab.
-      // Still proceed to abort/clear requests for the requesting tab below.
-    }
+  } else {
+    // Another tab requested stop. Do not stop the currently playing tab.
+    // Still proceed to abort/clear requests for the requesting tab below.
   }
 
   const st = getTab(tabId);

@@ -45,9 +45,10 @@
     ],
   ]);
 
-  let prefs; // saved preferences
-  let overlay; // reader view overlay
-  let contentHost; // div where main content resides
+  let prefs = null; // saved preferences
+  let overlay = null; // reader view overlay
+  let surface = null; // inner focusable div of overrlay
+  let contentHost = null; // div where main content resides
 
   // --------------------------
   // Storage helpers
@@ -198,11 +199,9 @@
     }
   }
 
-  function stopPlayback(notifyBackground = true) {
+  function stopPlayback(notifyBackground=true) {
     if (notifyBackground)
-      try {
-        chrome.runtime.sendMessage({ type: "tts.stop", payload: {} });
-      } catch {}
+      chrome.runtime.sendMessage({ type: "tts.stop", payload: {} }).catch();
 
     tts.playing = false;
     tts.btnPlay.style.display = "inherit";
@@ -275,11 +274,6 @@
         return;
       }
 
-      if (msg.type === "content.tts.cleanup") {
-        cleanup();
-        return;
-      }
-
       if (!tts.playing) return;
       const p = msg.payload || {};
       if (
@@ -297,7 +291,7 @@
 
       if (msg.type === "tts.ended") {
         if (p.reason && p.reason !== "natural") {
-          stopPlayback((notifyBackground = false));
+          stopPlayback((notifyBackground=false));
           return;
         }
         const next = tts.index + 1;
@@ -466,6 +460,7 @@
     }
     return cur; // fallback (end)
   }
+
   // --------------------------
   // UI + overlay
   // --------------------------
@@ -476,8 +471,8 @@
       <div id="rv-surface" role="dialog" aria-label="Reader View" tabindex="-1">
         <div id="rv-toolbar">
           <button class="rv-btn" id="rv-close" title="Exit">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
-            fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+          <svg viewBox="0 0 24 24" width="24" height="24"
+            fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
             aria-hidden="true" focusable="false">
             <path d="M14 4h6v16h-6"/>
             <path d="M12 12H6"/>
@@ -486,11 +481,11 @@
             <path d="M14 12h-1"/>
           </svg>
           </button>
-          <div id="rv-tts">
+          <div id="rv-tts" style="display:none">
             <div id="rv-servers"></div>
             <select id="rv-voice" title="Voice"></select>
             <button class="rv-btn" id="rv-voices-refresh" title="Refresh voices">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16"
+            <svg viewBox="0 0 24 24" width="16" height="16"
               fill="none" stroke="white" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
               aria-hidden="true" focusable="false">
               <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.2-5.2"/>
@@ -500,30 +495,34 @@
             </svg>
             </button>
             <div id="rv-rating-control" class="rv-rating-control" title="Rate the selected voice (0-3 stars)"></div>
+            <div id="rv-speed-div" style="display:none">
             <label class="rv-inline" title="Speed">
             <input id="rv-speed" type="range" min="0.7" max="1.5" step="0.05" value="1.0" />
             </label>
             <span id="rv-speed-label"></span>
+            </div>
+            <div id="rv-speak-div">
             <button class="rv-btn" id="rv-tts-play" title="Speak">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
-              fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            <svg viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
               aria-hidden="true" focusable="false">
               <path d="M11 5 6 9H3v6h3l5 4V5z"/>
               <path d="M15.5 8.5a4.5 4.5 0 0 1 0 7"/>
               <path d="M18 6a8 8 0 0 1 0 12"/>
-            </svg>
+            </svg><label for="rv-tts-play">Speak</label>
             </button>
+            </div>
             <div id="rv-tts-controls" style="display:none">
             <button class="rv-btn" id="rv-tts-stop" title="Stop">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
-              fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            <svg viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
               aria-hidden="true" focusable="false">
-              <rect x="7" y="7" width="10" height="10" rx="2"/>
-            </svg>
+              <rect x="5" y="5" width="14" height="14" rx="2"/>
+            </svg><label for="rv-tts-stop">stop</label>
             </button>
             <button class="rv-btn" id="rv-tts-prevp" title="Previous paragraph">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
-              fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            <svg viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
               aria-hidden="true" focusable="false">
               <path d="M19 12H9"/>
               <path d="m11 7-5 5 5 5"/>
@@ -531,24 +530,24 @@
             </svg>
             </button>
             <button class="rv-btn" id="rv-tts-prev" title="Previous sentence">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
-              fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            <svg viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
               aria-hidden="true" focusable="false">
               <path d="M19 12H7"/>
               <path d="m11 6-6 6 6 6"/>
             </svg>
             </button>
             <button class="rv-btn" id="rv-tts-next" title="Next sentence">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
-              fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            <svg viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
               aria-hidden="true" focusable="false">
               <path d="M5 12h12"/>
               <path d="m13 6 6 6-6 6"/>
             </svg>
             </button>
             <button class="rv-btn" id="rv-tts-nextp" title="Next paragraph">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
-              fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            <svg viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
               aria-hidden="true" focusable="false">
               <path d="M5 12h10"/>
               <path d="m13 7 5 5-5 5"/>
@@ -559,12 +558,10 @@
             <span id="rv-tts-status"></span>
           </div>
           <div id="rv-format">
-            <div id="rv-scrl-div">
             <input id="rv-scrl" type="checkbox"/><label for="rv-scrl">AutoScroll </label>
-            </div>
             <button class="rv-btn" id="rv-font-inc" title="Increase font">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
-              fill="none" stroke="white" stroke-width="1.6"
+            <svg viewBox="0 0 24 24" width="24" height="24"
+              fill="none" stroke="white" stroke-width="1.7"
               stroke-linecap="round" stroke-linejoin="round"
               aria-hidden="true">
               <path d="M4.5 18.5 9.5 5.5 14.5 18.5"/>
@@ -572,10 +569,9 @@
               <path d="M19 9v6"/>
               <path d="M16 12h6"/>
             </svg>
-            </svg>
             </button>
             <button class="rv-btn" id="rv-font-dec" title="Decrease font">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+            <svg viewBox="0 0 24 24" width="24" height="24"
               fill="none" stroke="white" stroke-width="1.6"
               stroke-linecap="round" stroke-linejoin="round"
               aria-hidden="true">
@@ -585,7 +581,7 @@
             </svg>
             </button>
             <button class="rv-btn" id="rv-width-widen" title="Widen page">
-            <svg width="24px" height="24px" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+            <svg width="24px" height="24px" viewBox="0 0 48 48">
               <g id="Layer_2" data-name="Layer 2">
                 <g id="invisible_box" data-name="invisible box">
                   <rect width="48" height="48" fill="none"/>
@@ -637,7 +633,7 @@
     document.getElementById("reader-view-overlay")?.remove();
 
     contentHost = overlay.querySelector("#rv-content");
-    const surface = overlay.querySelector("#rv-surface");
+    surface = overlay.querySelector("#rv-surface");
 
     // Apply saved prefs
     surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
@@ -657,136 +653,7 @@
     tts.controls = overlay.querySelector("#rv-tts-controls");
     tts.rating = overlay.querySelector("#rv-rating-control");
     tts.scrl = overlay.querySelector("#rv-scrl");
-    setStatus();
 
-    // const outside = Array.from(document.body.children).filter(n => n !== overlay);
-    // outside.forEach(n => { try { n.setAttribute("inert", ""); } catch(_){} });
-    async function cleanup() {
-      // await saveReadingProgress();
-      stopPlayback();
-      try {
-        chrome.runtime.sendMessage({ type: "tts.cleanup", payload: {} });
-      } catch {}
-      overlay.remove();
-      document.removeEventListener("keyup", onKey, true);
-      document.removeEventListener("copy", onCopy, true);
-      // outside.forEach(n => { try { n.removeAttribute("inert"); } catch(_){} });
-      document.documentElement.classList.remove("rv-active");
-      tts.prepared = false;
-      tts.segments = [];
-      tts.texts = [];
-      tts.index = 0;
-      tts.meta = [];
-      tts.server = null;
-      tts.highlightSpan = null;
-    }
-
-    function selectTarget() {
-      const target = contentHost.querySelector("#rv-article-body");
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(target);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }
-
-    function onKey(e) {
-      const accel = e.metaKey || e.ctrlKey;
-      if (accel && e.key.toLowerCase() === "a") {
-        e.preventDefault();
-        selectTarget();
-      }
-      if (e.key === "Escape") cleanup();
-      if (e.ctrlKey || e.metaKey || e.shiftKey) return;
-      if ((e.keyCode == 32 && e.altKey) || (e.key == "F8" && !e.altKey)) {
-        e.preventDefault();
-        if (tts.playing) tts.btnStop.click();
-        else tts.btnPlay.click();
-      }
-      if (!e.altKey) return;
-      if (e.key == "F9") {
-        e.preventDefault();
-        prefs.fontSize = Math.min(32, prefs.fontSize + 1);
-        surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
-        savePrefs();
-      } else if (e.keyCode == 189) {
-        e.preventDefault();
-        prefs.fontSize = Math.max(12, prefs.fontSize - 1);
-        surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
-        savePrefs();
-      }
-    }
-
-    function onCopy(e) {
-      const host = contentHost;
-      const sel = window.getSelection();
-      if (!sel || sel.rangeCount === 0) return;
-      const range = sel.getRangeAt(0);
-      if (!host.contains(range.commonAncestorContainer)) return;
-      e.preventDefault();
-      const div = document.createElement("div");
-      div.appendChild(range.cloneContents());
-      e.clipboardData.setData("text/plain", sel.toString());
-      e.clipboardData.setData("text/html", div.innerHTML);
-    }
-
-    // Toolbar handlers
-    overlay.querySelector("#rv-close").addEventListener("click", cleanup);
-
-    overlay.querySelector("#rv-font-inc").addEventListener("click", () => {
-      prefs.fontSize = Math.min(32, prefs.fontSize + 1);
-      surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
-      savePrefs();
-    });
-    overlay.querySelector("#rv-font-dec").addEventListener("click", () => {
-      prefs.fontSize = Math.max(12, prefs.fontSize - 1);
-      surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
-      savePrefs();
-    });
-    overlay.querySelector("#rv-width-widen").addEventListener("click", () => {
-      prefs.maxWidth = Math.min(1400, prefs.maxWidth + 40);
-      contentHost.style.setProperty("--rv-maxw", `${prefs.maxWidth}px`);
-      savePrefs();
-    });
-    overlay.querySelector("#rv-width-narrow").addEventListener("click", () => {
-      prefs.maxWidth = Math.max(520, prefs.maxWidth - 40);
-      contentHost.style.setProperty("--rv-maxw", `${prefs.maxWidth}px`);
-      savePrefs();
-    });
-    overlay
-      .querySelector("#rv-voices-refresh")
-      .addEventListener("click", async (e) => {
-        if (!tts.server) return;
-        const btn = e.target;
-        try {
-          setStatus("Refreshing voices...");
-          btn.disabled = true;
-          const r = await chrome.runtime.sendMessage({
-            type: "tts.refreshVoices",
-            payload: { server: tts.server },
-          });
-          if (!r || !r.ok) throw new Error(r?.error || "Refresh failed");
-
-          const cfg = SERVERS.get(tts.server);
-          cfg.voices = r.voices;
-
-          // Re-render dropdown and keep current selection if possible
-          const keep = tts.voice;
-          updateVoiceUI();
-          if (keep && cfg.voices.includes(keep)) {
-            tts.voiceEl.value = keep;
-            tts.voice = keep;
-          }
-          setStatus("Voices refreshed");
-        } catch {
-          setStatus("Refresh failed");
-        } finally {
-          btn.disabled = false;
-        }
-      });
-
-    document.addEventListener("keyup", onKey, true);
-    document.addEventListener("copy", onCopy, true);
     document.documentElement.appendChild(overlay);
     surface.focus();
   }
@@ -1149,11 +1016,23 @@
 
     prefs = await loadPrefs();
     tts.server = prefs.server;
+
     attachOverlay();
+    setupMiscControls();
     await setupTTSControls();
 
     const savedProgress = prefs.readingProgress[currentPageUrl];
     tts.index = savedProgress?.index || 0;
+
+    // when navigating away, the overlay is not destroyed,
+    // but it is now disconnected from background.js.
+    // So on pageshow, we need to remove the zombie overlay
+    window.addEventListener('pageshow', (event) => {
+      // event.persisted is true if the page was restored from BFCache
+      if (event.persisted) {
+        cleanup(notifyBackground=false);  // remove zombie overlay
+      }
+    });
 
     // don't attach article content until we finish building UI
     // otherwise adding UI elements causes DOM restructuring
@@ -1185,8 +1064,7 @@
 
   async function loadServerUI() {
     const serversDiv = overlay.querySelector("#rv-servers");
-    const speedInp = overlay.querySelector("#rv-speed");
-    const speedLabel = overlay.querySelector("#rv-speed-label");
+    const speedDiv = overlay.querySelector("#rv-speed-div");
     const fragment = document.createDocumentFragment();
 
     let liveServer = null;
@@ -1230,10 +1108,9 @@
           tts.server = newServer;
           prefs.server = newServer;
           buildSegments();
-          speedInp.style.display = SERVERS.get(tts.server)?.speed
+          speedDiv.style.display = SERVERS.get(tts.server)?.speed
             ? "inherit"
             : "none";
-          speedLabel.style.display = speedInp.style.display;
           updateRatingDisplay();
           savePrefs();
           updateVoiceUI();
@@ -1305,6 +1182,7 @@
     while (idx + 1 < tts.meta.length && tts.meta[idx + 1].el === el) idx++;
     return idx;
   }
+
   function findIdxAtClick(e) {
     const scope = contentHost.querySelector("#rv-article-body");
     if (!scope) return null;
@@ -1345,33 +1223,165 @@
     return idx;
   }
 
+  function playAtClick(e, moveOnly = false) {
+    if (!moveOnly) e.preventDefault(); // allow clicking on links
+    const idx = findIdxAtClick(e);
+    if (idx !== null) playAt(idx, moveOnly);
+  }
+
+  async function cleanup(notifyBackground=true) {
+    stopPlayback(notifyBackground);
+    if (notifyBackground) {
+      chrome.runtime.sendMessage({ type: "tts.cleanup", payload: {} }).catch();
+    }
+    overlay?.remove();
+    document.removeEventListener("keyup", onKey, true);
+    document.removeEventListener("copy", onCopy, true);
+    // outside.forEach(n => { try { n.removeAttribute("inert"); } catch(_){} });
+    document.documentElement.classList.remove("rv-active");
+    tts.prepared = false;
+    tts.segments = [];
+    tts.texts = [];
+    tts.index = 0;
+    tts.meta = [];
+    tts.server = null;
+    tts.highlightSpan = null;
+  }
+
+  function onKey(e) {
+    const accel = e.metaKey || e.ctrlKey;
+    if (accel && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      selectTarget();
+    }
+    if (e.key === "Escape") cleanup();
+    if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if ((e.keyCode == 32 && e.altKey) || (e.key == "F8" && !e.altKey)) {
+      e.preventDefault();
+      if (tts.playing) tts.btnStop.click();
+      else tts.btnPlay.click();
+    }
+    if (!e.altKey) return;
+    if (e.key == "F9") {
+      e.preventDefault();
+      prefs.fontSize = Math.min(32, prefs.fontSize + 1);
+      surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
+      savePrefs();
+    } else if (e.keyCode == 189) {
+      e.preventDefault();
+      prefs.fontSize = Math.max(12, prefs.fontSize - 1);
+      surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
+      savePrefs();
+    }
+  }
+
+  function onCopy(e) {
+    const host = contentHost;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (!host.contains(range.commonAncestorContainer)) return;
+    e.preventDefault();
+    const div = document.createElement("div");
+    div.appendChild(range.cloneContents());
+    e.clipboardData.setData("text/plain", sel.toString());
+    e.clipboardData.setData("text/html", div.innerHTML);
+  }
+
+  function selectTarget() {
+    const target = contentHost.querySelector("#rv-article-body");
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function setupMiscControls() {
+    tts.scrl.checked = prefs.autoScroll;
+    tts.scrl.addEventListener("change", () => {
+      prefs.autoScroll = tts.scrl.checked;
+      savePrefs();
+      highlightCurrent();
+      highlightReading();
+    });
+
+    // dbl click, middle click, or meta + click on sentence while not playing to start playing there
+    contentHost.addEventListener(
+      "dblclick",
+      (e) => {
+        if (!tts.playing) playAtClick(e);
+      },
+      true,
+    );
+
+    contentHost.addEventListener(
+      "mouseup",
+      (e) => {
+        if (e.button === 1) playAtClick(e);
+      },
+      true,
+    );
+
+    contentHost.addEventListener(
+      "click",
+      (e) => {
+        if (e.metaKey) {
+          playAtClick(e);
+          return;
+        }
+        // Single click: if playing, then start playing there, else just move index
+        playAtClick(e, (moveOnly = !tts.playing));
+      },
+      true,
+    );
+
+    // Toolbar handlers
+    overlay.querySelector("#rv-close").addEventListener("click", cleanup);
+
+    overlay.querySelector("#rv-font-inc").addEventListener("click", () => {
+      prefs.fontSize = Math.min(32, prefs.fontSize + 1);
+      surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
+      savePrefs();
+    });
+    overlay.querySelector("#rv-font-dec").addEventListener("click", () => {
+      prefs.fontSize = Math.max(12, prefs.fontSize - 1);
+      surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
+      savePrefs();
+    });
+    overlay.querySelector("#rv-width-widen").addEventListener("click", () => {
+      prefs.maxWidth = Math.min(1400, prefs.maxWidth + 40);
+      contentHost.style.setProperty("--rv-maxw", `${prefs.maxWidth}px`);
+      savePrefs();
+    });
+    overlay.querySelector("#rv-width-narrow").addEventListener("click", () => {
+      prefs.maxWidth = Math.max(520, prefs.maxWidth - 40);
+      contentHost.style.setProperty("--rv-maxw", `${prefs.maxWidth}px`);
+      savePrefs();
+    });
+    document.addEventListener("keyup", onKey, true);
+    document.addEventListener("copy", onCopy, true);
+  }
+
   // --------------------------
   // TTS Controls
   // --------------------------
   async function setupTTSControls() {
+    await loadServerUI();
+    if (!tts.server) return;
+
     const speedInp = overlay.querySelector("#rv-speed");
     const speedLabel = overlay.querySelector("#rv-speed-label");
     const btnPrev = overlay.querySelector("#rv-tts-prev");
     const btnNextP = overlay.querySelector("#rv-tts-nextp");
     const btnPrevP = overlay.querySelector("#rv-tts-prevp");
 
-    await loadServerUI();
+    updateVoiceUI();
 
-    speedInp.style.display = SERVERS.get(tts.server)?.speed
-      ? "inherit"
-      : "none";
-    speedLabel.style.display = speedInp.style.display;
+    if (SERVERS.get(tts.server)?.speed)
+      overlay.querySelector("#rv-speed-div").style.display = "inherit";
 
-    if (tts.server) updateVoiceUI();
-    // hide play controls if no live server
-    overlay.querySelector("#rv-tts").style.display = tts.server
-      ? "inherit"
-      : "none";
-
-    tts.scrl.checked = prefs.autoScroll;
-    overlay.querySelector("#rv-scrl-div").style.display = tts.server
-      ? "inherit"
-      : "none";
+    overlay.querySelector("#rv-tts").style.display = "inherit";
 
     // Handle click to set rating
     tts.rating.addEventListener("click", (e) => {
@@ -1418,6 +1428,38 @@
       }
     });
 
+    overlay
+      .querySelector("#rv-voices-refresh")
+      .addEventListener("click", async (e) => {
+        if (!tts.server) return;
+        const btn = e.target;
+        try {
+          setStatus("Refreshing voices...");
+          btn.disabled = true;
+          const r = await chrome.runtime.sendMessage({
+            type: "tts.refreshVoices",
+            payload: { server: tts.server },
+          });
+          if (!r || !r.ok) throw new Error(r?.error || "Refresh failed");
+
+          const cfg = SERVERS.get(tts.server);
+          cfg.voices = r.voices;
+
+          // Re-render dropdown and keep current selection if possible
+          const keep = tts.voice;
+          updateVoiceUI();
+          if (keep && cfg.voices.includes(keep)) {
+            tts.voiceEl.value = keep;
+            tts.voice = keep;
+          }
+          setStatus("Voices refreshed");
+        } catch {
+          setStatus("Refresh failed");
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
     speedInp.addEventListener("input", () => {
       const newSpeed = parseFloat(speedInp.value);
       if (tts.speed != newSpeed) {
@@ -1431,13 +1473,6 @@
         savePrefs();
         invalidateAudio();
       }
-    });
-
-    tts.scrl.addEventListener("change", () => {
-      prefs.autoScroll = tts.scrl.checked;
-      savePrefs();
-      highlightCurrent();
-      highlightReading();
     });
 
     // Button handlers
@@ -1491,41 +1526,5 @@
       }
       playAt(nextStart);
     };
-
-    function playAtClick(e, moveOnly = false) {
-      if (!moveOnly) e.preventDefault(); // allow clicking on links
-      const idx = findIdxAtClick(e);
-      if (idx !== null) playAt(idx, moveOnly);
-    }
-
-    // dbl click, middle click, or meta + click on sentence while not playing to start playing there
-    contentHost.addEventListener(
-      "dblclick",
-      (e) => {
-        if (!tts.playing) playAtClick(e);
-      },
-      true,
-    );
-
-    contentHost.addEventListener(
-      "mouseup",
-      (e) => {
-        if (e.button === 1) playAtClick(e);
-      },
-      true,
-    );
-
-    contentHost.addEventListener(
-      "click",
-      (e) => {
-        if (e.metaKey) {
-          playAtClick(e);
-          return;
-        }
-        // Single click: if playing, then start playing there, else just move index
-        playAtClick(e, (moveOnly = !tts.playing));
-      },
-      true,
-    );
   }
 })();

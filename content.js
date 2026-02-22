@@ -103,7 +103,6 @@
     texts: [],
     index: 0,
     playing: false,
-    playToken: 0,
     prefetchAhead: 4, // # TTS segments to prefetch
     statusEl: null, // status label
     voiceEl: null, // voice list control
@@ -124,15 +123,11 @@
     .substring(0, 2)
     .toLowerCase();
 
-  function sig() {
-    return `${tts.server}|${tts.voice}|${tts.speed}`;
-  }
-
   // Show status message to user
   // set msg to '' or omit to show playing status
   function setStatus(msg = "") {
     if (msg === "") {
-      msg = `${tts.playing ? "Playing" : "Ready"} ${tts.index + 1} / ${tts.segments.length}`;
+      msg = `${tts.playing ? "▶️" : "Ready"} ${tts.index + 1} / ${tts.segments.length}`;
     }
     tts.statusEl.textContent = msg;
   }
@@ -152,10 +147,8 @@
 
   // Main playback scheduler
   async function scheduleAt(index) {
-    const token = ++tts.playToken;
     tts.index = index;
     saveReadingProgress();
-    const _sig = sig();
 
     highlightCurrent();
 
@@ -166,7 +159,7 @@
       tts.playing = true;
       tts.btnPlay.style.display = "none";
       tts.controls.style.display = "inherit";
-      setStatus(`Streaming ${index + 1} / ${tts.segments.length}`);
+      setStatus();
 
       const endIndex = Math.min(
         tts.segments.length - 1,
@@ -180,8 +173,6 @@
       await chrome.runtime.sendMessage({
         type: "tts.fetchWindow",
         payload: {
-          signature: _sig,
-          token,
           server: tts.server,
           voice: tts.voice,
           speed: tts.speed,
@@ -212,15 +203,10 @@
     setStatus();
   }
 
-  function invalidateAudio(continuePlay = true) {
+  function restartAudio(continuePlay = true) {
     const wasPlaying = tts.playing;
 
     stopPlayback();
-
-    // Clear offscreen cache for this tab when signature changes.
-    try {
-      chrome.runtime.sendMessage({ type: "tts.cleanup", payload: {} });
-    } catch {}
 
     if (wasPlaying && continuePlay)
       setTimeout(() => {
@@ -278,8 +264,6 @@
       if (!tts.playing) return;
       const p = msg.payload || {};
       if (
-        p.signature !== sig() ||
-        p.token !== tts.playToken ||
         p.index !== tts.index
       )
         return;
@@ -291,6 +275,7 @@
       }
 
       if (msg.type === "tts.ended") {
+        if (!tts.playing) return;
         if (p.reason && p.reason !== "natural") {
           stopPlayback((notifyBackground=false));
           return;
@@ -972,6 +957,7 @@
       ["lesswrong.com", '[class*="FixedPositionToC"]'],
       ["slate.fr", '[class*="to-read"]'],
       ["stratechery.com", "sup, sup *"],
+      ["/books/", '[type="pagebreak"]'],
     ];
     for (const [url, elem] of PER_SITE_REMOVE) {
       if (currentPageUrl.includes(url)) {
@@ -1108,7 +1094,7 @@
         if (event.target.checked) {
           const newServer = parseInt(event.target.value, 10);
           if (newServer == tts.server) return;
-          invalidateAudio();
+          restartAudio();
           tts.server = newServer;
           prefs.server = newServer;
           buildSegments();
@@ -1428,7 +1414,7 @@
         updateRatingDisplay();
         updateSpeedUI();
         savePrefs();
-        invalidateAudio();
+        restartAudio();
       }
     });
 
@@ -1475,7 +1461,7 @@
         prefs.speeds[tts.server][tts.voice] = newSpeed;
 
         savePrefs();
-        invalidateAudio();
+        restartAudio();
       }
     });
 

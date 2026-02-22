@@ -133,11 +133,14 @@ function sanitizePocket(text) {
     // remove extraneous punctuation after . ?
     .replace(/([\.\?])[^\s\p{L}\p{N}]+/gu, '$1 ')
     .replace(/\$\s?([\d,]+(?:\.\d{2})?)/g, '$1 dollars')
+    .replace(/No\.\s*(\d+)/g, 'number $1')
     // drop . from middle initial
     .replace(/\s([A-Z])\.\s/g, ' $1 ')
     // replace V.I.P. with VIP
     .replace(/([A-Z]\.){3,}/g, (match) => {  return match.replace(/\./g, ""); } )
     .trim()
+    // don't end sentence with , ;
+    .replace(/[,;]+$/, '')
     ;
 }
 
@@ -471,9 +474,8 @@ class CachePlayer {
 const tabs = new Map();
 // tabId -> {
 //   signature: string,
-//   token: number,
 //   server: number, voice: string, speed: number, lang: string,
-//   textByIndex: Map<number,string>,
+//   texts: Map<number,string>,
 //   cache: Map<string, { sampleRate:number, pcmU8:Uint8Array } | { audioBuffer: AudioBuffer }>,
 //   decodeCtx: AudioContext | null,
 //   aborts: Map<string, AbortController>,    // key -> controller
@@ -483,19 +485,18 @@ const tabs = new Map();
 //   prefetchRunning: boolean,
 // }
 
-let current = null; // { tabId, key, signature, token, index, abort, player }
+let current = null; // { tabId, key, signature, index, abort, player }
 
 function getTab(tabId) {
   let st = tabs.get(tabId);
   if (!st) {
     st = {
-      signature: null,
-      token: 0,
+      signature: "",
       server: null,
       voice: null,
       speed: 1.0,
       lang: "en",
-      textByIndex: new Map(),
+      texts: new Map(),
       cache: new Map(),
       decodeCtx: null,
       aborts: new Map(),
@@ -511,8 +512,12 @@ function getTab(tabId) {
   return st;
 }
 
-function cacheKey(signature, index) {
-  return `${signature}:${index}`;
+function sig(st) {
+  return `${st.server}|${st.voice}|${st.speed}|${st.lang}`;
+}
+
+function cacheKey(st, index) {
+  return `${index}:${sig(st)}`;
 }
 
 function getDecodeCtx(st) {
@@ -534,7 +539,7 @@ async function stopCurrent(reason = "stopped") {
   const c = current;
   current = null;
 
-  const { tabId, signature, token, index } = c;
+  const { tabId, index } = c;
 
   try {
     c.abort?.abort();
@@ -543,11 +548,10 @@ async function stopCurrent(reason = "stopped") {
     await c.player?.stop();
   } catch {}
 
-  emit(tabId, "tts.ended", { signature, token, index, reason });
+  emit(tabId, "tts.ended", { index, reason });
 }
 
-function abortAllForTab(tabId) {
-  const st = getTab(tabId);
+function abortAll(st) {
   for (const ac of st.aborts.values()) {
     try {
       ac.abort();
@@ -557,9 +561,7 @@ function abortAllForTab(tabId) {
   st.inFlight.clear();
 }
 
-function clearQueue(tabId) {
-  const st = getTab(tabId);
-  st.queue.length = 0;
+function clearQueue(st) {
   st.queued.clear();
   st.prefetchRunning = false;
 }
@@ -572,7 +574,7 @@ async function synthesizeToCache(st, key, index) {
   if (st.cache.has(key)) return;
   if (st.inFlight.has(key)) return st.inFlight.get(key);
 
-  const text = st.textByIndex.get(index) || "";
+  const text = st.texts.get(index) || "";
   const serverId = st.server;
   const voice = st.voice;
   const speed = st.speed;
@@ -624,23 +626,24 @@ async function synthesizeToCache(st, key, index) {
   return task;
 }
 
-async function streamPlayAndCache(tabId, st, signature, token, index) {
-  const key = cacheKey(signature, index);
+async function streamPlayAndCache(tabId, st, index) {
+  const key = cacheKey(st, index);
   if (st.inFlight.has(key)) {
     await st.inFlight.get(key);
-    if (st.cache.has(key)) return await playFromCache(tabId, st, signature, token, index);
+    if (st.cache.has(key)) return await playFromCache(tabId, st, index);
   }
 
-  const text = st.textByIndex.get(index) || "";
+  const text = st.texts.get(index) || "";
   const serverId = st.server;
   const cfg = SERVERS.get(serverId);
   const body = buildBody(serverId, { text, voice: st.voice, speed: st.speed, lang: st.lang });
+  const signature = sig(st);
 
   if (isTooShortForServer(cfg, body)) throw new Error("Too short");
 
   if (!(cfg?.streamable ?? true)) {
     await synthesizeToCache(st, key, index);
-    return await playFromCache(tabId, st, signature, token, index);
+    return await playFromCache(tabId, st, index);
   }
 
   const ac = new AbortController();
@@ -669,7 +672,7 @@ async function streamPlayAndCache(tabId, st, signature, token, index) {
     }
 
     const player = new StreamingPlayer(sampleRate);
-    current = { tabId, key, signature, token, index, abort: ac, player };
+    current = { tabId, key, signature, index, abort: ac, player };
     await player.start();
 
     const reader = r.body.getReader();
@@ -681,7 +684,7 @@ async function streamPlayAndCache(tabId, st, signature, token, index) {
       if (done) break;
 
       // Abort if context changed
-      if (!current || current.token !== token) {
+      if (!current) {
         ac.abort();
         return;
       }
@@ -692,7 +695,7 @@ async function streamPlayAndCache(tabId, st, signature, token, index) {
 
       if (player.didStartPlayback && !current.notified) {
         current.notified = true;
-        emit(tabId, "tts.playing", { signature, token, index });
+        emit(tabId, "tts.playing", { index });
         st.prefetchGateOpened = true;
         ensurePrefetchLoop(st);
       }
@@ -722,16 +725,16 @@ async function streamPlayAndCache(tabId, st, signature, token, index) {
 
     await player.finish();
   } catch (e) {
-    emit(tabId, "tts.error", { signature, token, index, error: String(e.message || e) });
+    emit(tabId, "tts.error", { index, error: String(e.message || e) });
     await stopCurrent("error");
   } finally {
     st.aborts.delete(key);
-    if (current?.token === token) await stopCurrent("natural");
+    await stopCurrent("natural");
   }
 }
 
-async function playFromCache(tabId, st, signature, token, index) {
-  const key = cacheKey(signature, index);
+async function playFromCache(tabId, st, index) {
+  const key = cacheKey(st, index);
   const entry = st.cache.get(key);
   if (!entry) return;
 
@@ -741,10 +744,12 @@ async function playFromCache(tabId, st, signature, token, index) {
   st.aborts.set(key, ac);
   const ctx = getDecodeCtx(st);
   const player = new CachePlayer({ ctx });
-  current = { tabId, key, signature, token, index, abort: ac, player };
+
+  const signature = sig(st);
+  current = { tabId, signature, key, index, abort: ac, player };
 
   await player.startFromAudioBuffer(entry.audioBuffer);
-  emit(tabId, "tts.playing", { signature, token, index });
+  emit(tabId, "tts.playing", { index });
   st.prefetchGateOpened = true;
   ensurePrefetchLoop(st);
 
@@ -752,7 +757,7 @@ async function playFromCache(tabId, st, signature, token, index) {
 
   st.aborts.delete(key);
 
-  if (current && current.tabId === tabId && current.token === token) {
+  if (current && current.tabId === tabId) {
     await stopCurrent("natural");
   }
 }
@@ -774,12 +779,10 @@ async function ensurePrefetchLoop(st) {
         if (!key) break;
         st.queued.delete(key);
 
-        // stop/cleanup might have cleared token/signature; still safe
         if (st.cache.has(key)) continue;
 
         // parse index from key
-        const idx = Number(key.split(":").pop());
-        if (!Number.isFinite(idx)) continue;
+        const idx = Number(key.split(":").shift());
 
         try {
           await synthesizeToCache(st, key, idx);
@@ -793,8 +796,8 @@ async function ensurePrefetchLoop(st) {
   })();
 }
 
-function enqueuePrefetch(st, signature, index) {
-  const key = cacheKey(signature, index);
+function enqueuePrefetch(st, index) {
+  const key = cacheKey(st, index);
   if (st.cache.has(key)) return;
   if (st.inFlight.has(key)) return;
   if (st.queued.has(key)) return;
@@ -808,63 +811,67 @@ function enqueuePrefetch(st, signature, index) {
 // Window handler
 // --------------------------
 
-function pruneCache(st, startIndex, endIndex) {
-  for (const key of st.cache.keys()) {
-    let [sig, idx] = key.split(":");
+function pruneMap(signature, map, startIndex, endIndex, log, isAbort=false) {
+  for (const key of map.keys()) {
+    let [idx, sig] = key.split(":");
     idx = Number(idx);
-    if (st.signature !== sig || idx < startIndex - 1 || idx > endIndex) {
-      st.cache.delete(key);
-      // console.log(`pruning ${key}`);
+    if (sig != signature || idx < startIndex - 1 || idx > endIndex) {
+      if (isAbort) {
+        const ac = map.get(key);
+        try { ac.abort(); } catch {}
+      }
+      map.delete(key);
+      // console.log(`${log} ${key}`);
     }
   }
 }
 
+function pruneOutsideOfWindow(st, startIndex, endIndex) {
+  const signature = sig(st);
+  pruneMap(signature, st.cache, startIndex, endIndex, "Pruning");
+  pruneMap(signature, st.aborts, startIndex, endIndex, "Aborting", isAbort=true);
+  pruneMap(signature, st.inFlight, startIndex, endIndex, "Cancelling");
+}
+
 async function handleWindow(p) {
   const tabId = p.tabId;
-  const signature = p.signature || "";
-  const token = Number(p.token || 0);
-
   const st = getTab(tabId);
 
-  // Ignore old windows (stale token). Token is monotonic per content playback session.
-  if (token < st.token) return;
-
-  // Signature change: clear cache (audio unlikely useful now)
-  if (signature !== st.signature) {
-    st.cache.clear();
-  }
-
-  // Update session fields
-  st.signature = signature;
-  st.token = token;
   st.server = p.server;
   st.voice = p.voice;
   st.speed = p.speed;
   st.lang = p.lang || "en";
+  signature = sig(st);
+
+  // Signature change: clear cache (audio unlikely useful now)
+  if (signature !== st.signature) {
+    abortAll(st);
+    st.cache.clear();
+    st.signature = signature;
+  }
 
   // Update text map
   const segs = Array.isArray(p.segments) ? p.segments : [];
   for (const s of segs) {
     if (!s) continue;
-    st.textByIndex.set(Number(s.index), String(s.text || ""));
+    st.texts.set(Number(s.index), String(s.text || ""));
   }
 
   const startIndex = Number(p.startIndex);
   const endIndex = Number(p.endIndex);
 
-  if (!Number.isFinite(startIndex) || !Number.isFinite(endIndex)) return;
-  pruneCache(st, startIndex, endIndex);
+  pruneOutsideOfWindow(st, startIndex, endIndex);
 
   // Clear any queued prefetches that are outside the new window.
   // (Basic behavior; can harden later.)
-  clearQueue(tabId);
+  clearQueue(st);
 
   // If current playback is not exactly what we want, start it.
   const curOk =
     current &&
     current.tabId === tabId &&
     current.signature === signature &&
-    current.token === token &&
+    // current.token === token &&
     current.index === startIndex;
 
   if (!curOk) {
@@ -874,29 +881,25 @@ async function handleWindow(p) {
     // reset prefetch gate: we only start prefetching once audio has begun playing
     st.prefetchGateOpened = false;
 
-    const startKey = cacheKey(signature, startIndex);
+    const startKey = cacheKey(st, startIndex);
 
     // Kick playback asynchronously so we can queue prefetch immediately.
     st.playTask = (async () => {
       try {
         // Start playing startIndex, using cache/inFlight/stream as needed
         if (st.cache.has(startKey)) {
-          await playFromCache(tabId, st, signature, token, startIndex);
+          await playFromCache(tabId, st, startIndex);
         } else {
-          await streamPlayAndCache(tabId, st, signature, token, startIndex);
+          await streamPlayAndCache(tabId, st, startIndex);
         }
       } catch (e) {
         if (e.message === "Too short")
           emit(tabId, "tts.ended", {
-            signature,
-            token,
             index: startIndex,
             reason: "natural"
           });
         else
           emit(tabId, "tts.error", {
-            signature,
-            token,
             index: startIndex,
             error: String(e && (e.message || e)),
           });
@@ -906,7 +909,7 @@ async function handleWindow(p) {
 
   // Queue prefetch window strictly serialized
   for (let i = startIndex + 1; i <= endIndex; i++) {
-    enqueuePrefetch(st, signature, i);
+    enqueuePrefetch(st, i);
   }
 
   // If audio has started, this will begin draining the queue; otherwise it will start on tts.playing.
@@ -928,8 +931,8 @@ async function handleStop(tabId) {
   }
 
   const st = getTab(tabId);
-  abortAllForTab(tabId);
-  clearQueue(tabId);
+  abortAll(st);
+  clearQueue(st);
   st.prefetchGateOpened = false;
   st.playTask = null;
   // keep cache
@@ -939,7 +942,7 @@ async function handleCleanup(tabId) {
   await handleStop(tabId);
   const st = getTab(tabId);
   st.cache.clear();
-  st.textByIndex.clear();
+  st.texts.clear();
   if (st.decodeCtx) {
     await st.decodeCtx.close().catch();
     st.decodeCtx = null;
@@ -961,8 +964,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       } catch (e) {
         const p = msg.payload || {};
         emit(p.tabId, "tts.error", {
-          signature: p.signature,
-          token: p.token,
           index: p.startIndex,
           error: String(e && (e.message || e)),
         });

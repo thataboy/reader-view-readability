@@ -105,7 +105,6 @@
     playing: false,
     playToken: 0,
     prefetchAhead: 4, // # TTS segments to prefetch
-    keepBehind: 3,
     statusEl: null, // status label
     voiceEl: null, // voice list control
     btnPlay: null,

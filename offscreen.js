@@ -149,8 +149,10 @@ function sanitizeCommon(text) {
 
     // Whitelist: Keep letters (\p{L}), numbers (\p{N}),
     // basic punctuation (\p{P}), and spaces (\s).
-    // This automatically strips emojis, arrows, and symbols.
     .replace(/[^\p{L}\p{N}\p{P}\p{S}\s]/gu, '')
+
+    // Arrows, dingbats, geometric shapes, miscellaneous symbols, etc.
+    .replace(/[\u2190-\u21FF\u25A0-\u25FF\u2600-\u26FF\u2700-\u27BF]+/g, '')
 
     // !!! and ???
     .replace(/([!?.])\1+/g, '$1')
@@ -806,6 +808,17 @@ function enqueuePrefetch(st, signature, index) {
 // Window handler
 // --------------------------
 
+function pruneCache(st, startIndex, endIndex) {
+  for (const key of st.cache.keys()) {
+    let [sig, idx] = key.split(":");
+    idx = Number(idx);
+    if (st.signature !== sig || idx < startIndex - 1 || idx > endIndex) {
+      st.cache.delete(key);
+      // console.log(`pruning ${key}`);
+    }
+  }
+}
+
 async function handleWindow(p) {
   const tabId = p.tabId;
   const signature = p.signature || "";
@@ -840,6 +853,7 @@ async function handleWindow(p) {
   const endIndex = Number(p.endIndex);
 
   if (!Number.isFinite(startIndex) || !Number.isFinite(endIndex)) return;
+  pruneCache(st, startIndex, endIndex);
 
   // Clear any queued prefetches that are outside the new window.
   // (Basic behavior; can harden later.)

@@ -99,11 +99,10 @@
     server: null,
     voice: "",
     speed: 1.0,
-    segments: [],
     texts: [],
     index: 0,
     playing: false,
-    prefetchAhead: 4, // # TTS segments to prefetch
+    prefetchAhead: 3, // # TTS segments to prefetch
     statusEl: null, // status label
     voiceEl: null, // voice list control
     btnPlay: null,
@@ -127,13 +126,13 @@
   // set msg to '' or omit to show playing status
   function setStatus(msg = "") {
     if (msg === "") {
-      msg = `${tts.playing ? "▶️" : "Ready"} ${tts.index + 1} / ${tts.segments.length}`;
+      msg = `${tts.playing ? "▶️" : "Ready"} ${tts.index + 1} / ${tts.texts.length}`;
     }
     tts.statusEl.textContent = msg;
   }
 
   function playAt(idx, moveOnly = false) {
-    if (idx < 0 || idx >= tts.segments.length) return;
+    if (idx < 0 || idx >= tts.texts.length) return;
     tts.index = idx;
     if (moveOnly || !tts.server) {
       saveReadingProgress();
@@ -162,7 +161,7 @@
       setStatus();
 
       const endIndex = Math.min(
-        tts.segments.length - 1,
+        tts.texts.length - 1,
         index + tts.prefetchAhead,
       );
       const segments = [];
@@ -216,7 +215,7 @@
 
   // Saves the current TTS reading progress (index) to storage.
   async function saveReadingProgress() {
-    if (!tts.prepared || tts.segments.length < LONG_PAGE_THRESHOLD) {
+    if (!tts.prepared || tts.texts.length < LONG_PAGE_THRESHOLD) {
       return;
     }
 
@@ -225,12 +224,12 @@
 
     if (!prefs.readingProgress) prefs.readingProgress = {};
 
-    if (tts.index == 0 || tts.index + 1 >= tts.segments.length)
+    if (tts.index == 0 || tts.index + 1 >= tts.texts.length)
       delete prefs.readingProgress[currentPageUrl];
     else
       prefs.readingProgress[currentPageUrl] = {
         index: tts.index,
-        segments: tts.segments.length,
+        segments: tts.texts.length,
         timestamp: Date.now(),
       };
 
@@ -281,7 +280,7 @@
           return;
         }
         const next = tts.index + 1;
-        if (next < tts.segments.length) {
+        if (next < tts.texts.length) {
           let pause = SERVERS.get(tts.server).pause || 0;
           if (pause > 0) {
             pause += Math.random() * pause * 0.2;
@@ -546,6 +545,34 @@
             <span id="rv-tts-status"></span>
           </div>
           <div id="rv-format">
+            <button class="rv-btn" id="rv-find-btn">
+            <svg viewBox="0 0 24 24" ${svgSize}
+              fill="none" stroke="white" stroke-width="1.7"
+              stroke-linecap="round" stroke-linejoin="round"
+              aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M20 20l-3.5-3.5" />
+            </svg>
+            </button>
+            <div id="rv-find-panel" style="display:none; align-items:center; gap:1px;">
+              <input id="rv-find-input" type="search" placeholder="Find" autocomplete="off" spellcheck="false"
+                style="width:${isMobile ? '80px' : '120px'};"/>
+              <span id="rv-find-count"></span>
+              <button class="rv-btn rv-compact" id="rv-find-prev" title="Previous match">
+                <svg viewBox="0 0 24 24" width="20" height="20"
+                  fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+                  aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M15 18l-6-6 6-6"/>
+                </svg>
+              </button>
+              <button class="rv-btn rv-compact" id="rv-find-next" title="Next match">
+                <svg viewBox="0 0 24 24" width="20" height="20"
+                  fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+                  aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M9 6l6 6-6 6"/>
+                </svg>
+              </button>
+            </div>
             <input id="rv-scrl" type="checkbox"/><label for="rv-scrl">${isMobile ? '':'Auto'}Scroll</label>
             <button class="rv-btn" id="rv-font-inc" title="Increase font">
             <svg viewBox="0 0 24 24" ${svgSize}
@@ -616,6 +643,160 @@
     link.id = "rv-style-link";
     link.href = chrome.runtime.getURL("overlay.css");
     document.head.appendChild(link);
+  }
+
+  /* =========================
+     Reader View Overlay Search
+     ========================= */
+
+  // state
+  const rvFind = {
+    matches: [],
+    index: -1,
+    overlaySpans: [], // store created highlights
+  };
+
+  // clear previous highlights
+  function clearFind() {
+    rvFind.overlaySpans.forEach(span => {
+      if (span.parentNode) {
+        const parent = span.parentNode;
+        while (span.firstChild) parent.insertBefore(span.firstChild, span);
+        span.remove();
+      }
+    });
+    // This merges the split text nodes back into one, fixing index drift
+    contentHost.normalize();
+
+    rvFind.overlaySpans = [];
+    rvFind.matches = [];
+    rvFind.index = -1;
+  }
+
+  // search texts
+  function doFind(query) {
+    clearFind();
+
+    if (!query) {
+      updateFindCounter();
+      return;
+    }
+
+    // const safe = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(query, "gi");
+
+    for (let i = 0; i < tts.texts.length; i++) {
+      const text = tts.texts[i];
+      let match;
+      while ((match = regex.exec(text))) {
+        rvFind.matches.push({
+          segIndex: i,
+          start: match.index,
+          length: match[0].length,
+        });
+      }
+    }
+
+    applyFindHighlights();
+    updateFindCounter();
+    if (rvFind.matches.length) rvJumpTo(0);
+  }
+
+  // apply highlights via separate span, never touch original text nodes
+  function applyFindHighlights() {
+    rvFind.matches.forEach(m => {
+      const meta = tts.meta[m.segIndex];
+      if (!meta?.el) return;
+
+      try {
+        // CORRECT CALCULATION:
+        // m.start is the position of the word WITHIN the segment.
+        // meta.start is the position of the segment WITHIN the element.
+        const matchStart = meta.start + m.start;
+        const matchEnd = matchStart + m.length;
+
+        // Use your existing range helper to find the specific text nodes
+        const r = rangeFromOffsets(meta.el, matchStart, matchEnd);
+
+        const span = document.createElement("span");
+        span.className = "rv-find-mark";
+
+        // Use document fragment extraction to safely wrap across nested tags
+        const contents = r.extractContents();
+        span.appendChild(contents);
+        r.insertNode(span);
+
+        rvFind.overlaySpans.push(span);
+      } catch (e) {
+        console.error("Highlighting failed:", e);
+      }
+    });
+  }
+
+  // jump to next/prev
+  function rvJumpTo(i) {
+    if (!rvFind.matches.length) return;
+    rvFind.index = (i + rvFind.matches.length) % rvFind.matches.length;
+
+    rvFind.overlaySpans.forEach(s => s.classList.remove("active"));
+
+    const span = rvFind.overlaySpans[rvFind.index];
+    if (!span) return;
+
+    span.classList.add("active");
+    span.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    updateFindCounter();
+  }
+
+  function rvNext() {
+    rvJumpTo(rvFind.index + 1);
+  }
+
+  function rvPrev() {
+    rvJumpTo(rvFind.index - 1);
+  }
+
+  function updateFindCounter() {
+    const el = overlay.querySelector("#rv-find-count");
+    if (!el) return;
+    el.textContent = rvFind.matches.length
+       ? `${rvFind.index + 1}/${rvFind.matches.length}`
+       : "0";
+  }
+
+  function initFindUI() {
+    let timer;
+
+    const input = overlay.querySelector("#rv-find-input");
+    const panel = overlay.querySelector("#rv-find-panel");
+
+    overlay.querySelector("#rv-find-btn").onclick = () => {
+      const visible = panel.style.display === "flex";
+      panel.style.display = visible ? "none" : "flex";
+      if (visible) {
+        clearFind();
+      } else {
+        input.focus();
+        input.select();
+        doFind(input.value);
+      }
+    };
+
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => doFind(input.value), 300);
+    });
+
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.shiftKey ? rvPrev() : rvNext();
+        e.preventDefault();
+      }
+    });
+
+    overlay.querySelector("#rv-find-next").onclick = rvNext;
+    overlay.querySelector("#rv-find-prev").onclick = rvPrev;
   }
 
   function attachOverlay() {
@@ -906,7 +1087,7 @@
       tts.index = newIdx !== -1 ? newIdx : 0;
     } else {
       // clamp tts.index
-      if (tts.index + 1 >= tts.segments.length) tts.index = 0;
+      if (tts.index + 1 >= tts.texts.length) tts.index = 0;
     }
 
     highlightCurrent();
@@ -1230,12 +1411,12 @@
     // outside.forEach(n => { try { n.removeAttribute("inert"); } catch(_){} });
     document.documentElement.classList.remove("rv-active");
     tts.prepared = false;
-    tts.segments = [];
     tts.texts = [];
     tts.index = 0;
     tts.meta = [];
     tts.server = null;
     tts.highlightSpan = null;
+    clearFind();
   }
 
   function onKey(e) {
@@ -1243,13 +1424,27 @@
     if (accel && e.key.toLowerCase() === "a") {
       e.preventDefault();
       selectTarget();
+      return;
     }
-    if (e.key === "Escape") cleanup();
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (overlay?.querySelector("#rv-find-panel")?.style.display === "flex")
+        overlay.querySelector("#rv-find-btn").click();
+      else
+        cleanup();
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (!e.altKey && e.key === "F2") {
+      e.preventDefault();
+      overlay.querySelector("#rv-find-btn").click();
+      return;
+    }
     if ((e.keyCode == 32 && e.altKey) || (e.key == "F8" && !e.altKey)) {
       e.preventDefault();
       if (tts.playing) tts.btnStop.click();
       else tts.btnPlay.click();
+      return;
     }
     if (!e.altKey) return;
     if (e.key == "F9") {
@@ -1257,11 +1452,13 @@
       prefs.fontSize = Math.min(32, prefs.fontSize + 1);
       surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
       savePrefs();
+      return;
     } else if (e.keyCode == 189) {
       e.preventDefault();
       prefs.fontSize = Math.max(12, prefs.fontSize - 1);
       surface.style.setProperty("--rv-font-size", `${prefs.fontSize}px`);
       savePrefs();
+      return;
     }
   }
 
@@ -1328,6 +1525,8 @@
 
     // Toolbar handlers
     overlay.querySelector("#rv-close").addEventListener("click", cleanup);
+
+    initFindUI();
 
     overlay.querySelector("#rv-font-inc").addEventListener("click", () => {
       prefs.fontSize = Math.min(32, prefs.fontSize + 1);

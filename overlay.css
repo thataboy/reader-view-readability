@@ -117,8 +117,8 @@
     justify-content: center;
     border: 1px solid var(--rv-border);
     background: var(--rv-button);
-    border-radius: 6px;
-    padding: 3px 6px;
+    border-radius: 4px;
+    padding: 3px 4px;
     cursor: pointer;
     width: auto !important;
     min-width: 0 !important;
@@ -126,12 +126,8 @@
     flex: 0 0 auto !important;
     box-sizing: border-box;
 }
-#rv-toolbar .rv-btn img {
-    cursor: pointer;
-    width: 20px;
-    height: 20px;
-    background: black;
-    color: white;
+#rv-toolbar .rv-compact {
+    padding: 3px 1px !important;
 }
 .rv-inline {
     display: inline-flex;
@@ -191,6 +187,19 @@ html.rv-active body {
     flex-wrap: wrap;
     margin-left: auto;
     margin-right: 6px;
+}
+#rv-format #rv-find-input {
+     padding: 4px 6px !important;
+     border-radius:2px;
+     border:1px solid var(--rv-border);
+     background: var(--rv-bg);
+     color: var(--rv-fg);
+}
+#rv-format #rv-find-count {
+     margin-left:4px;
+     opacity:0.9;
+     font-size:13px;
+     white-space:nowrap;
 }
 .rv-tts-active {
     background: rgba(255, 255, 0, 0.3) !important;
@@ -264,4 +273,14 @@ html.rv-active body {
 .rv-rating-control:hover .rv-rating-star:hover,
 .rv-rating-control:hover .rv-rating-star:hover ~ .rv-rating-star {
     color: orange !important;
+}
+.rv-find-mark {
+    background: #997043 !important;
+    color: #ddd !important;
+    border: none !important;
+}
+.rv-find-mark.active {
+    background: #99bb4f !important;
+    border: 1px dotted gold !important;
+    border-radius: 3px !important;
 }

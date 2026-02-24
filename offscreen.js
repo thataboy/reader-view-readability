@@ -11,10 +11,12 @@
 // Background is a message relay only.
 
 function emit(tabId, type, payload) {
-  chrome.runtime.sendMessage({
-    type: "tts.forwardToTab",
-    payload: { tabId, type, payload },
-  }).catch()
+  chrome.runtime
+    .sendMessage({
+      type: "tts.forwardToTab",
+      payload: { tabId, type, payload },
+    })
+    .catch();
 }
 
 // --------------------------
@@ -33,13 +35,9 @@ const SERVER_IP = navigator.userAgent.includes("Mac OS X")
   ? "127.0.0.1"
   : "192.168.1.11";
 
-
 const SERVERS = new Map([
   [Server.MY_KOKORO, { port: 9090, min_len: 2, streamable: false }],
-  [
-    Server.VOX_ANE,
-    { port: 9000, min_len: 5, streamable: true },
-  ],
+  [Server.VOX_ANE, { port: 9000, min_len: 5, streamable: true }],
   [
     Server.SUPERTONIC,
     { port: 8001, min_len: 5, sanitizer: sanitizeSupertonic, streamable: true },
@@ -51,13 +49,19 @@ const SERVERS = new Map([
   [
     Server.CANDLE,
     {
-      port: 9900, min_len: 1, sanitizer: sanitizePocket, streamable: true,
+      port: 9900,
+      min_len: 1,
+      sanitizer: sanitizePocket,
+      streamable: true,
     },
   ],
   [
     Server.MLX,
     {
-      port: 9700, min_len: 1, sanitizer: sanitizePocket, streamable: false,
+      port: 9700,
+      min_len: 1,
+      sanitizer: sanitizePocket,
+      streamable: false,
     },
   ],
 ]);
@@ -74,94 +78,107 @@ const SERVERS = new Map([
 function sanitizeVox(text) {
   // Vox freaks out if text is all caps
   if (/^[^a-z]*[A-Z][^a-z]*$/.test(text)) text = text.toLowerCase();
-  return text
-    .replace(/[()[\]|~`/…]/g, ' ')
-    // .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
-    .replace(/[“”"]/g, ' ')
-    .replace(/\!{2,}/g, '!')
-    // .replace(/[‘’]/g, "'")
-    .replace(/(\.|\*|\-){3,}/g, ' ')
-    // .replace(/-(?![a-zA-Z])|(?<![a-zA-Z])-/g, ' ')
-    // .replace(/[—:;]/g, ', ')
-    // .replace(/[^\n\x20-\x7E]/g, ' ').replace(/ +/g, ' ').trim();
-    .replace(/([,.])\s*[.,]/g, '$1 ')
-    .replace(/^[,.]\s*/, '')
-    .replace(/(\s*(\.))+$/, '$1')
-    .replace(/\s+([,.])/g, '$1')
-    // .replace(/(["”’'])\s*\.?\s*$/, '')
-    // .replace(/\s+([”’])/g, '$1')
-    // .replace(/([‘“])\s+/g, '$1')
-    // .replace(/(\s*[,!:;]\s*)+$/, '')
-    // .replace(/^(\s*[,!:;]\s*)+/, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (
+    text
+      .replace(/[()[\]|~`/…]/g, " ")
+      // .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+      .replace(/[“”"]/g, " ")
+      .replace(/\!{2,}/g, "!")
+      // .replace(/[‘’]/g, "'")
+      .replace(/(\.|\*|\-){3,}/g, " ")
+      // .replace(/-(?![a-zA-Z])|(?<![a-zA-Z])-/g, ' ')
+      // .replace(/[—:;]/g, ', ')
+      // .replace(/[^\n\x20-\x7E]/g, ' ').replace(/ +/g, ' ').trim();
+      .replace(/([,.])\s*[.,]/g, "$1 ")
+      .replace(/^[,.]\s*/, "")
+      .replace(/(\s*(\.))+$/, "$1")
+      .replace(/\s+([,.])/g, "$1")
+      // .replace(/(["”’'])\s*\.?\s*$/, '')
+      // .replace(/\s+([”’])/g, '$1')
+      // .replace(/([‘“])\s+/g, '$1')
+      // .replace(/(\s*[,!:;]\s*)+$/, '')
+      // .replace(/^(\s*[,!:;]\s*)+/, '')
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }
-
 
 /**
  * Normalizes a string by converting special characters/accents
  * to their closest ASCII equivalents.
  */
 const manualMap = {
-  'ø': 'o', 'Ø': 'O',
-  'æ': 'ae', 'Æ': 'AE',
-  'œ': 'oe', 'Œ': 'OE',
-  'ß': 'ss', 'ł': 'l', 'Ł': 'L'
+  ø: "o",
+  Ø: "O",
+  æ: "ae",
+  Æ: "AE",
+  œ: "oe",
+  Œ: "OE",
+  ß: "ss",
+  ł: "l",
+  Ł: "L",
 };
 
 function sanitizeSupertonic(str) {
-  return str
-    .replace(/[><()\[\]^]/g, ' ')
-    // remove emojis
-    // .replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, "")
-    // normalize special chars
-    .replace(/[øØæÆœŒßłŁ]/g, match => manualMap[match])
-    // Use NFD normalization to decompose accents (e.g., 'é' -> 'e' + '´')
-    // .normalize("NFD")
-    // Use Regex to remove the "Combining Diacritical Marks" (the accents)
-    // .replace(/[\u0300-\u036f]/g, "")
-    .trim();
+  return (
+    str
+      .replace(/[><()\[\]^]/g, " ")
+      // remove emojis
+      // .replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, "")
+      // normalize special chars
+      .replace(/[øØæÆœŒßłŁ]/g, (match) => manualMap[match])
+      // Use NFD normalization to decompose accents (e.g., 'é' -> 'e' + '´')
+      // .normalize("NFD")
+      // Use Regex to remove the "Combining Diacritical Marks" (the accents)
+      // .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+  );
 }
 
 function sanitizePocket(text) {
-  return text
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/[[\]!]/g, "")
-    .replace(/(\d)\.(\d)/g, '$1 point $2')
-    .replace(/([a-z]{2,3})\.([a-z]{2,3}\d)/g, '$1 dot $2')
-    // remove extraneous punctuation after . ?
-    .replace(/([\.\?])[^\s\p{L}\p{N}]+/gu, '$1 ')
-    .replace(/\$\s?([\d,]+(?:\.\d{2})?)/g, '$1 dollars')
-    .replace(/No\.\s*(\d+)/g, 'number $1')
-    // drop . from middle initial
-    .replace(/\s([A-Z])\.\s/g, ' $1 ')
-    // replace V.I.P. with VIP
-    .replace(/([A-Z]\.){3,}/g, (match) => {  return match.replace(/\./g, ""); } )
-    .trim()
-    // don't end sentence with , ;
-    .replace(/[,;]+$/, '')
-    ;
+  return (
+    text
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .replace(/[[\]!]/g, "")
+      .replace(/(\d)\.(\d)/g, "$1 point $2")
+      .replace(/([a-z]{2,3})\.([a-z]{2,3}\d)/g, "$1 dot $2")
+      // remove extraneous punctuation after . ?
+      .replace(/([\.\?])[^\s\p{L}\p{N}]+/gu, "$1 ")
+      .replace(/\$\s?([\d,]+(?:\.\d{2})?)/g, "$1 dollars")
+      .replace(/No\.\s*(\d+)/g, "number $1")
+      // drop . from middle initial
+      .replace(/\s([A-Z])\.\s/g, " $1 ")
+      // replace V.I.P. with VIP
+      .replace(/([A-Z]\.){3,}/g, (match) => {
+        return match.replace(/\./g, "");
+      })
+      .trim()
+      // don't end sentence with , ;
+      .replace(/[,;]+$/, "")
+  );
 }
 
 function sanitizeCommon(text) {
-  if (!text) return '';
-  return text
-    // Remove URLs (TTS engines usually mangle these)
-    .replace(/(https?:\/\/[^\s]+)/g, '')
+  if (!text) return "";
+  return (
+    text
+      // Remove URLs (TTS engines usually mangle these)
+      .replace(/(https?:\/\/[^\s]+)/g, "")
 
-    // Whitelist: Keep letters (\p{L}), numbers (\p{N}),
-    // basic punctuation (\p{P}), and spaces (\s).
-    .replace(/[^\p{L}\p{N}\p{P}\p{S}\s]/gu, '')
+      // Whitelist: Keep letters (\p{L}), numbers (\p{N}),
+      // basic punctuation (\p{P}), and spaces (\s).
+      .replace(/[^\p{L}\p{N}\p{P}\p{S}\s]/gu, "")
 
-    // Arrows, dingbats, geometric shapes, miscellaneous symbols, etc.
-    .replace(/[\u2190-\u21FF\u25A0-\u25FF\u2600-\u26FF\u2700-\u27BF]+/g, '')
+      // Arrows, dingbats, geometric shapes, miscellaneous symbols, etc.
+      .replace(/[\u2190-\u21FF\u25A0-\u25FF\u2600-\u26FF\u2700-\u27BF]+/g, "")
 
-    // !!! and ???
-    .replace(/([!?.])\1+/g, '$1')
+      // !!! and ???
+      .replace(/([!?.])\1+/g, "$1")
 
-    .replace(/\s+/g, ' ')
-    .trim();
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }
 
 // Initialized once in the outer scope
@@ -173,10 +190,10 @@ const ABBREVIATION_MAP = {
   "V.": "versus",
   "v.": "versus",
   "A.I.": "eigh eye",
-  "AI": "eigh eye",
-  "MacOS": "mac oh ess",
+  AI: "eigh eye",
+  MacOS: "mac oh ess",
   "lbs.": "pounds",
-  "lbs": "pounds",
+  lbs: "pounds",
   "Prof.": "Professor",
   "Bros.": "Brothers",
   "Sr.": "Senior",
@@ -188,17 +205,17 @@ const ABBREVIATION_MAP = {
   "Col.": "Colonel",
   "Lt.": "Lieutenant",
   "Fig.": "Figure",
-  "St.": "Saint"
+  "St.": "Saint",
 };
 
 // Escape dots and join keys into a single regex pattern
 const ABBR_REGEX = new RegExp(
-  '(?<=\\s|^)(' +
-  Object.keys(ABBREVIATION_MAP)
-    .map(k => k.replace('.', '\\.'))
-    .join('|')
-  + ')(?=\\s|$|\\b)',
-  'g'
+  "(?<=\\s|^)(" +
+    Object.keys(ABBREVIATION_MAP)
+      .map((k) => k.replace(".", "\\."))
+      .join("|") +
+    ")(?=\\s|$|\\b)",
+  "g",
 );
 
 function expandAbbreviations(text) {
@@ -216,10 +233,10 @@ function buildBody(serverId, { text, voice, speed, lang }) {
   const cfg = SERVERS.get(serverId);
   if (!cfg) throw new Error("Unknown server");
 
-  text = sanitizeCommon(text)
+  text = sanitizeCommon(text);
   const sanitizer = cfg.sanitizer;
   if (sanitizer) text = sanitizer(text);
-  text = expandAbbreviations(text)
+  text = expandAbbreviations(text);
 
   return {
     text,
@@ -231,7 +248,7 @@ function buildBody(serverId, { text, voice, speed, lang }) {
 }
 
 async function fetchVoices(serverId, refresh) {
-  const path = '/voices' + (refresh ? '/refresh' : '');
+  const path = "/voices" + (refresh ? "/refresh" : "");
   const r = await fetch(endpointFor(serverId, path));
   if (!r.ok) throw new Error(`${path} failed: ${r.status} ${r.statusText}`);
   const j = await r.json();
@@ -339,7 +356,10 @@ class StreamingPlayer {
 
       const tmp = new Uint8Array(this.headerLen);
       let off = 0;
-      for (const h of this.headerBuf) { tmp.set(h, off); off += h.length; }
+      for (const h of this.headerBuf) {
+        tmp.set(h, off);
+        off += h.length;
+      }
 
       const parsed = tryParseWavHeader(tmp);
       if (parsed) {
@@ -364,7 +384,11 @@ class StreamingPlayer {
   _tryPlayBuffer() {
     // Need 2 bytes for a single Int16 sample
     const bytesPerFrame = 2;
-    if (this.pcmData.length < (this.didStartPlayback ? bytesPerFrame : this.minBufferSize)) return;
+    if (
+      this.pcmData.length <
+      (this.didStartPlayback ? bytesPerFrame : this.minBufferSize)
+    )
+      return;
 
     const framesToPlay = Math.floor(this.pcmData.length / bytesPerFrame);
     const bytesToPlay = framesToPlay * bytesPerFrame;
@@ -372,7 +396,11 @@ class StreamingPlayer {
     this.pcmData = this.pcmData.subarray(bytesToPlay);
 
     const audioBuffer = this.ctx.createBuffer(1, framesToPlay, this.sampleRate);
-    const int16 = new Int16Array(dataToPlay.buffer, dataToPlay.byteOffset, framesToPlay);
+    const int16 = new Int16Array(
+      dataToPlay.buffer,
+      dataToPlay.byteOffset,
+      framesToPlay,
+    );
     const out = audioBuffer.getChannelData(0);
 
     for (let i = 0; i < framesToPlay; i++) {
@@ -480,8 +508,7 @@ const tabs = new Map();
 //   decodeCtx: AudioContext | null,
 //   aborts: Map<string, AbortController>,    // key -> controller
 //   inFlight: Map<string, Promise<void>>,    // key -> promise that stores cache
-//   queue: string[],
-//   queued: Set<string>,
+//   queue: Set<string>, // set of segment keys (index:signature)
 //   prefetchRunning: boolean,
 // }
 
@@ -501,8 +528,7 @@ function getTab(tabId) {
       decodeCtx: null,
       aborts: new Map(),
       inFlight: new Map(),
-      queue: [],
-      queued: new Set(),
+      queue: new Set(),
       prefetchRunning: false,
       prefetchGateOpened: false,
       playTask: null,
@@ -559,11 +585,6 @@ function abortAll(st) {
   }
   st.aborts.clear();
   st.inFlight.clear();
-}
-
-function clearQueue(st) {
-  st.queued.clear();
-  st.prefetchRunning = false;
 }
 
 // --------------------------
@@ -636,7 +657,12 @@ async function streamPlayAndCache(tabId, st, index) {
   const text = st.texts.get(index) || "";
   const serverId = st.server;
   const cfg = SERVERS.get(serverId);
-  const body = buildBody(serverId, { text, voice: st.voice, speed: st.speed, lang: st.lang });
+  const body = buildBody(serverId, {
+    text,
+    voice: st.voice,
+    speed: st.speed,
+    lang: st.lang,
+  });
   const signature = sig(st);
 
   if (isTooShortForServer(cfg, body)) throw new Error("Too short");
@@ -705,7 +731,10 @@ async function streamPlayAndCache(tabId, st, index) {
     if (totalLen > 0) {
       const fullU8 = new Uint8Array(totalLen);
       let off = 0;
-      for (const c of chunks) { fullU8.set(c, off); off += c.length; }
+      for (const c of chunks) {
+        fullU8.set(c, off);
+        off += c.length;
+      }
 
       const ctx = getDecodeCtx(st);
       let audioBuffer;
@@ -767,43 +796,54 @@ async function playFromCache(tabId, st, index) {
 // --------------------------
 
 async function ensurePrefetchLoop(st) {
-  if (!st.prefetchGateOpened) return;
-  if (st.prefetchRunning) return;
+  // 1. Gate check: only one loop instance allowed at a time
+  if (st.prefetchRunning || !st.prefetchGateOpened) return;
 
   st.prefetchRunning = true;
 
-  (async () => {
-    try {
-      while (st.queue.length > 0) {
-        const key = st.queue.shift();
-        if (!key) break;
-        st.queued.delete(key);
+  try {
+    // 2. The loop runs as long as there is work and the gate is open
+    while (st.queue.size > 0 && st.prefetchGateOpened) {
+      // javascript Set preserves insertion order
+      // key == first item added
+      const key = st.queue.values().next().value;
+      st.queue.delete(key);
 
-        if (st.cache.has(key)) continue;
+      // Skip if already cached (e.g. from a previous session)
+      if (st.cache.has(key)) continue;
 
-        // parse index from key
-        const idx = Number(key.split(":").shift());
+      const idx = Number(key.split(":").shift());
 
-        try {
-          await synthesizeToCache(st, key, idx);
-        } catch {
-          // Prefetch failures shouldn't stop playback; content can still stream later.
+      try {
+        // 3. THIS IS THE BLOCKER:
+        // It waits for the server to finish synthesis before continuing.
+        // If the user "jumps", pruneOutsideOfWindow will call abort()
+        // on this fetch, which throws an error and moves us to the catch block.
+        await synthesizeToCache(st, key, idx);
+      } catch (e) {
+        if (e.name === "AbortError") {
+          // This happens when the user jumps or changes settings.
+          // We don't need to log this as an error; just move to the next item.
+          continue;
         }
       }
-    } finally {
-      st.prefetchRunning = false;
     }
-  })();
+  } finally {
+    // 4. Always reset the flag so a new loop can be triggered later
+    st.prefetchRunning = false;
+
+    // If more items were added to the queue while we were finishing up,
+    // re-trigger the loop.
+    if (st.queue.size > 0) {
+      ensurePrefetchLoop(st);
+    }
+  }
 }
 
 function enqueuePrefetch(st, index) {
   const key = cacheKey(st, index);
-  if (st.cache.has(key)) return;
-  if (st.inFlight.has(key)) return;
-  if (st.queued.has(key)) return;
-
-  st.queue.push(key);
-  st.queued.add(key);
+  if (st.cache.has(key) || st.inFlight.has(key) || st.queue.has(key)) return;
+  st.queue.add(key);
   ensurePrefetchLoop(st);
 }
 
@@ -811,14 +851,16 @@ function enqueuePrefetch(st, index) {
 // Window handler
 // --------------------------
 
-function pruneMap(signature, map, startIndex, endIndex, log, isAbort=false) {
+function pruneMap(signature, map, startIndex, endIndex, _log, isAbort = false) {
   for (const key of map.keys()) {
     let [idx, sig] = key.split(":");
     idx = Number(idx);
     if (sig != signature || idx < startIndex - 1 || idx > endIndex) {
       if (isAbort) {
         const ac = map.get(key);
-        try { ac.abort(); } catch {}
+        try {
+          ac.abort();
+        } catch {}
       }
       map.delete(key);
       // console.log(`${log} ${key}`);
@@ -829,7 +871,14 @@ function pruneMap(signature, map, startIndex, endIndex, log, isAbort=false) {
 function pruneOutsideOfWindow(st, startIndex, endIndex) {
   const signature = sig(st);
   pruneMap(signature, st.cache, startIndex, endIndex, "Pruning");
-  pruneMap(signature, st.aborts, startIndex, endIndex, "Aborting", isAbort=true);
+  pruneMap(
+    signature,
+    st.aborts,
+    startIndex,
+    endIndex,
+    "Aborting",
+    (isAbort = true),
+  );
   pruneMap(signature, st.inFlight, startIndex, endIndex, "Cancelling");
 }
 
@@ -860,33 +909,27 @@ async function handleWindow(p) {
   const startIndex = Number(p.startIndex);
   const endIndex = Number(p.endIndex);
 
+  // 1. Abort any fetches for indices now outside the window
+  // This will "break" any current 'await synthesizeToCache' in the loop
   pruneOutsideOfWindow(st, startIndex, endIndex);
 
-  // Clear any queued prefetches that are outside the new window.
-  // (Basic behavior; can harden later.)
-  clearQueue(st);
+  // 2. Clear the old queue
+  st.queue.clear();
 
-  // If current playback is not exactly what we want, start it.
+  // 3. Check if we need to start a new stream or keep playing
   const curOk =
     current &&
     current.tabId === tabId &&
     current.signature === signature &&
-    // current.token === token &&
     current.index === startIndex;
 
   if (!curOk) {
-    // stop current playback (single player)
     await stopCurrent("superseded");
+    st.prefetchGateOpened = false; // Close gate for the new segment
 
-    // reset prefetch gate: we only start prefetching once audio has begun playing
-    st.prefetchGateOpened = false;
-
-    const startKey = cacheKey(st, startIndex);
-
-    // Kick playback asynchronously so we can queue prefetch immediately.
     st.playTask = (async () => {
       try {
-        // Start playing startIndex, using cache/inFlight/stream as needed
+        const startKey = cacheKey(st, startIndex);
         if (st.cache.has(startKey)) {
           await playFromCache(tabId, st, startIndex);
         } else {
@@ -896,7 +939,7 @@ async function handleWindow(p) {
         if (e.message === "Too short")
           emit(tabId, "tts.ended", {
             index: startIndex,
-            reason: "natural"
+            reason: "natural",
           });
         else
           emit(tabId, "tts.error", {
@@ -907,12 +950,12 @@ async function handleWindow(p) {
     })();
   }
 
-  // Queue prefetch window strictly serialized
+  // 4. Populate new queue
   for (let i = startIndex + 1; i <= endIndex; i++) {
     enqueuePrefetch(st, i);
   }
 
-  // If audio has started, this will begin draining the queue; otherwise it will start on tts.playing.
+  // 5. Trigger loop (it will only actually run once streamPlayAndCache opens the gate)
   ensurePrefetchLoop(st);
 }
 
@@ -924,7 +967,7 @@ async function handleStop(tabId) {
   // Single global player, but stop should be scoped to the requesting tab.
   // If tabId is missing (non-tab context), treat as global stop.
   if (current && (current.tabId === tabId || !tabId)) {
-      await stopCurrent("stopped");
+    await stopCurrent("stopped");
   } else {
     // Another tab requested stop. Do not stop the currently playing tab.
     // Still proceed to abort/clear requests for the requesting tab below.
@@ -932,7 +975,7 @@ async function handleStop(tabId) {
 
   const st = getTab(tabId);
   abortAll(st);
-  clearQueue(st);
+  st.queue.clear();
   st.prefetchGateOpened = false;
   st.playTask = null;
   // keep cache
@@ -990,11 +1033,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === "offscreen.tts.listVoices" || msg.type === "offscreen.tts.refreshVoices") {
+  if (
+    msg.type === "offscreen.tts.listVoices" ||
+    msg.type === "offscreen.tts.refreshVoices"
+  ) {
     (async () => {
       try {
         const serverId = msg.payload?.server;
-        const voices = await fetchVoices(serverId, msg.type === "offscreen.tts.refreshVoices");
+        const voices = await fetchVoices(
+          serverId,
+          msg.type === "offscreen.tts.refreshVoices",
+        );
         sendResponse?.({ ok: true, voices });
       } catch (e) {
         sendResponse?.({ ok: false, error: String(e && (e.message || e)) });

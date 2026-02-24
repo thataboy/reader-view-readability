@@ -28,7 +28,7 @@
         active: true,
         speed: 1.2,
         chunk_size: [80, 350],
-        pause: 50,
+        pause: 150,
       },
     ],
     [
@@ -45,7 +45,8 @@
     ],
   ]);
 
-  const isMobile = window.matchMedia('(max-width: 720px)').matches;
+  const isSmallScrn = window.matchMedia('(max-width: 720px)').matches;
+  const isAndroid = navigator.userAgent.includes("ndroid");
 
   let prefs = null; // saved preferences
   let overlay = null; // reader view overlay
@@ -387,14 +388,14 @@
       tts.highlightSpan = span;
       if (!tts.playing) span.classList.add("rv-tts-inactive");
       if (tts.scrl.checked)
-        span.scrollIntoView({ block: "center", behavior: "smooth" });
+        span.scrollIntoView({ block: "center", behavior: "instant" });
     } catch (e) {
       // Fallback: just highlight the whole paragraph/element
       m.el.classList.add("rv-tts-highlight");
       if (!tts.playing) span.classList.add("rv-tts-inactive");
       tts.highlightSpan = m.el;
       if (tts.scrl.checked)
-        m.el.scrollIntoView({ block: "center", behavior: "smooth" });
+        m.el.scrollIntoView({ block: "center", behavior: "instant" });
     }
   }
 
@@ -452,8 +453,8 @@
   function buildOverlay(article) {
     overlay = document.createElement("div");
     overlay.id = "reader-view-overlay";
-    const hideMobile = isMobile ? 'style="display:none" ' : '';
-    const svgSize = isMobile ? 'width="20" height="20"' : 'width="24" height="24"';
+    const hideSmall = isSmallScrn ? 'style="display:none" ' : '';
+    const svgSize = isSmallScrn ? 'width="20" height="20"' : 'width="24" height="24"';
     overlay.innerHTML = `
       <div id="rv-surface" role="dialog" aria-label="Reader View" tabindex="-1">
         <div id="rv-toolbar">
@@ -469,7 +470,9 @@
           </svg>
           </button>
           <div id="rv-tts" style="display:none">
-            <div id="rv-servers"></div>
+            <div id="rv-servers-div">
+              <select id="rv-servers-sel" style="display:none"></select>
+            </div>
             <select id="rv-voice" title="Voice"></select>
             <button class="rv-btn" id="rv-voices-refresh" title="Refresh voices">
             <svg viewBox="0 0 24 24" width="16" height="16"
@@ -544,7 +547,7 @@
             </div>
             <span id="rv-tts-status"></span>
           </div>
-          <div id="rv-format">
+          <div id="rv-toolbar-rhs">
             <button class="rv-btn" id="rv-find-btn">
             <svg viewBox="0 0 24 24" ${svgSize}
               fill="none" stroke="white" stroke-width="1.7"
@@ -556,8 +559,8 @@
             </button>
             <div id="rv-find-panel" style="display:none; align-items:center; gap:1px;">
               <input id="rv-find-input" type="search" placeholder="Find" autocomplete="off" spellcheck="false"
-                style="width:${isMobile ? '80px' : '120px'};"/>
-              <span id="rv-find-count"></span>
+                style="width:${isSmallScrn ? '80px' : '120px'};"/>
+              <label for="rv-find-input" id="rv-find-count"></label>
               <button class="rv-btn rv-compact" id="rv-find-prev" title="Previous match">
                 <svg viewBox="0 0 24 24" width="20" height="20"
                   fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
@@ -573,7 +576,7 @@
                 </svg>
               </button>
             </div>
-            <input id="rv-scrl" type="checkbox"/><label for="rv-scrl">${isMobile ? '':'Auto'}Scroll</label>
+            <input id="rv-scrl" type="checkbox"/><label for="rv-scrl">${isSmallScrn ? '':'Auto'}Scroll</label>
             <button class="rv-btn" id="rv-font-inc" title="Increase font">
             <svg viewBox="0 0 24 24" ${svgSize}
               fill="none" stroke="white" stroke-width="1.7"
@@ -595,7 +598,7 @@
               <path d="M16 12h6"/>
             </svg>
             </button>
-            <button class="rv-btn" id="rv-width-widen" ${hideMobile}title="Widen page">
+            <button class="rv-btn" id="rv-width-widen" ${hideSmall}title="Widen page">
             <svg width="24px" height="24px" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
               <g>
                 <g>
@@ -611,7 +614,7 @@
               </g>
             </svg>
             </button>
-            <button class="rv-btn" id="rv-width-narrow" ${hideMobile}title="Narrow page">
+            <button class="rv-btn" id="rv-width-narrow" ${hideSmall}title="Narrow page">
             <svg width="24px" height="24px" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
               <g>
                 <g>
@@ -744,7 +747,7 @@
     if (!span) return;
 
     span.classList.add("active");
-    span.scrollIntoView({ behavior: "smooth", block: "center" });
+    span.scrollIntoView({ behavior: "instant", block: "center" });
 
     updateFindCounter();
   }
@@ -774,6 +777,9 @@
     overlay.querySelector("#rv-find-btn").onclick = () => {
       const visible = panel.style.display === "flex";
       panel.style.display = visible ? "none" : "flex";
+      if (isSmallScrn) {
+        overlay.querySelector("#rv-tts").style.display = visible ? "flex" : "none";
+      }
       if (visible) {
         clearFind();
       } else {
@@ -785,7 +791,7 @@
 
     input.addEventListener("input", () => {
       clearTimeout(timer);
-      timer = setTimeout(() => doFind(input.value), 300);
+      timer = setTimeout(() => doFind(input.value), isAndroid ? 1000 : 300);
     });
 
     input.addEventListener("keydown", e => {
@@ -860,6 +866,7 @@
     "p.m",
     "e.g",
     "i.e",
+    "a.k.a",
     "Vs",
     "vs",
     "cf",
@@ -1138,6 +1145,7 @@
       ["lesswrong.com", '[class*="FixedPositionToC"]'],
       ["slate.fr", '[class*="to-read"]'],
       ["stratechery.com", "sup, sup *"],
+      ["poets.org", '[class*="field_credit"]'],
       ["/books/", '[type="pagebreak"]'],
     ];
     for (const [url, elem] of PER_SITE_REMOVE) {
@@ -1233,12 +1241,27 @@
     tts.rating.innerHTML = generateRatingControlHTML(rating);
   }
 
-  async function loadServerUI() {
-    const serversDiv = overlay.querySelector("#rv-servers");
+  function switchServer(val) {
+    const newServer = parseInt(val, 10);
+    if (newServer == tts.server) return;
+    restartAudio();
+    tts.server = newServer;
+    prefs.server = newServer;
+    buildSegments();
     const speedDiv = overlay.querySelector("#rv-speed-div");
-    const fragment = document.createDocumentFragment();
+    speedDiv.style.display = SERVERS.get(tts.server)?.speed
+      ? "inherit"
+      : "none";
+    updateRatingDisplay();
+    savePrefs();
+    updateVoiceUI();
+  }
 
+  async function loadServerUI() {
+    const actives = new Map();
     let liveServer = null;
+
+    // collect active servers
     for (const [id, server] of SERVERS.entries()) {
       server.voices = [];
       if (!server.active) continue;
@@ -1253,45 +1276,51 @@
           liveServer ||= id;
         }
       } catch {}
-
-      if (!server.voices.length) continue;
-
-      const radioInput = document.createElement("input");
-      radioInput.type = "radio";
-      radioInput.id = `server-${id}`;
-      radioInput.name = "tts_server";
-      radioInput.value = id;
-      radioInput.checked = id == tts.server || id == liveServer;
-      radioInput.className = "rv-radio";
-
-      const radioLabel = document.createElement("label");
-      radioLabel.htmlFor = `server-${id}`;
-      radioLabel.textContent = server.name;
-
-      fragment.appendChild(radioInput);
-      fragment.appendChild(radioLabel);
-
-      radioInput.addEventListener("change", (event) => {
-        if (event.target.checked) {
-          const newServer = parseInt(event.target.value, 10);
-          if (newServer == tts.server) return;
-          restartAudio();
-          tts.server = newServer;
-          prefs.server = newServer;
-          buildSegments();
-          speedDiv.style.display = SERVERS.get(tts.server)?.speed
-            ? "inherit"
-            : "none";
-          updateRatingDisplay();
-          savePrefs();
-          updateVoiceUI();
-        }
-      });
+      if (server.voices.length > 0) actives.set(id, server);
     }
 
-    serversDiv.replaceChildren(fragment);
     // fallback to first live server if current server is not responding
     if (!SERVERS.get(tts.server)?.voices?.length) tts.server = liveServer;
+
+    if (actives.size === 0) return;
+
+    const fragment = document.createDocumentFragment();
+
+    if (actives.size <= (isSmallScrn ? 2 : 4)) {
+      for (const [id, server] of actives.entries()) {
+        const radioInput = document.createElement("input");
+        radioInput.type = "radio";
+        radioInput.id = `server-${id}`;
+        radioInput.name = "tts_server";
+        radioInput.value = id;
+        radioInput.checked = id == tts.server || id == liveServer;
+        const radioLabel = document.createElement("label");
+        radioLabel.htmlFor = `server-${id}`;
+        radioLabel.textContent = server.name;
+        fragment.appendChild(radioInput);
+        fragment.appendChild(radioLabel);
+
+        radioInput.addEventListener("change", (event) => {
+          if (event.target.checked) switchServer(event.target.value);
+        });
+      }
+      const serversDiv = overlay.querySelector("#rv-servers-div");
+      serversDiv.replaceChildren(fragment);
+    } else {
+      for (const [id, server] of actives.entries()) {
+        const opt = document.createElement("option");
+        opt.value = id;
+        opt.textContent = server.name;
+        opt.selected = id == tts.server || id == liveServer;
+        fragment.appendChild(opt);
+      }
+      const serversSel = overlay.querySelector("#rv-servers-sel");
+      serversSel.replaceChildren(fragment);
+      serversSel.style.display = "inline";
+      serversSel.addEventListener("change", (event) => {
+        switchServer(event.target.value);
+      });
+    }
   }
 
   function updateVoiceUI() {
@@ -1660,7 +1689,7 @@
         prefs.speeds[tts.server][tts.voice] = newSpeed;
 
         savePrefs();
-        restartAudio();
+        restartAudio(continuePlay=false);
       }
     });
 

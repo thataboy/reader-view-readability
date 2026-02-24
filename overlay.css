@@ -20,6 +20,11 @@
     overscroll-behavior: contain;
     z-index: 2147483647;
 }
+#rv-surface input,
+#rv-surface select {
+    all: revert !important;
+    box-sizing: border-box !important; /* Usually necessary to keep layout sane */
+}
 #rv-content {
     max-width: var(--rv-maxw, 860px);
     margin: 24px auto;
@@ -75,11 +80,11 @@
 }
 @media (prefers-color-scheme: dark) {
     :root {
-        --rv-bg: #111;
+        --rv-bg: #222;
         --rv-fg: #e8e8e8;
-        --rv-border: #113338;
+        --rv-border: #1a3a2a;
         --rv-panel: #113322;
-        --rv-button: #113322;
+        --rv-button: #224433;
     }
     ::selection {
       background-color: #225599;
@@ -102,9 +107,9 @@
     display: flex;
     flex-wrap: nowrap;
     align-items: center;
-    gap: 0px 4px;
+    gap: 0px 0px;
     margin: 0;
-    padding: 4px 0;
+    padding: 3px 4px;
     background: var(--rv-panel);
     border: 1px solid var(--rv-border);
     backdrop-filter: saturate(120%) blur(6px);
@@ -115,8 +120,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid var(--rv-border);
-    background: var(--rv-button);
+    border: 1px solid transparent;
+    background: var(--rv-button) !important;
     border-radius: 4px;
     padding: 3px 4px;
     cursor: pointer;
@@ -125,6 +130,9 @@
     max-width: none !important;
     flex: 0 0 auto !important;
     box-sizing: border-box;
+}
+#rv-toolbar .rv-btn:hover {
+    border: 1px solid var(--rv-border);
 }
 #rv-toolbar .rv-compact {
     padding: 3px 1px !important;
@@ -138,17 +146,17 @@
 }
 #rv-surface::-webkit-scrollbar {
     width: 12px;
-    background: transparent;
+    background: transparent !important;
 }
 #rv-surface::-webkit-scrollbar-track {
-    background: transparent;
+    background: transparent !important;
     border-left: 1px solid var(--rv-border);
 }
 #rv-surface::-webkit-scrollbar-thumb {
-    background: #888;
-    border-radius: 6px;
+    background: #999 !important;
+    border-radius: 6px !important;
     min-height: 30px;
-    border: 1px solid #666;
+    border: 1px solid #555 !important;
     background-clip: content-box;
 }
 #rv-surface::-webkit-scrollbar-thumb:hover {
@@ -158,15 +166,19 @@
 #rv-surface::-webkit-scrollbar-corner {
     background: transparent;
 }
-#rv-servers {
-    margin-left: 6px;
+#rv-servers-div {
+    margin-left: 0px;
     margin-right: 6px;
 }
-#rv-voice {
+#rv-close {
+    margin-right: 6px;
+}
+#rv-voice, #rv-servers-sel {
+    padding: 4px 6px !important;
     vertical-align: middle !important;
 }
-#rv-voice:focus {
-  outline: none !important;
+#rv-voice:focus, #rv-servers-sel:focus {
+    outline: none !important;
 }
 #rv-speed {
     width: 120px;
@@ -177,33 +189,38 @@ html.rv-active,
 html.rv-active body {
     overflow: hidden !important;
 }
-#rv-tts, #rv-format {
+#rv-tts, #rv-toolbar-rhs {
+    flex: 1 1 auto;
     display: flex;
     flex-wrap: wrap;
-    align-items: center; /* Ensures stars, select, and labels are centered */
+    align-items: center;
     gap: 4px 4px;
+    justify-content: center;
 }
-#rv-format {
-    flex-wrap: wrap;
+#rv-toolbar-rhs {
     margin-left: auto;
-    margin-right: 6px;
+    justify-content: right;
 }
-#rv-format #rv-find-input {
+#rv-find-panel {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    /*flex: 1 1 auto;           */
+}
+#rv-find-input {
      padding: 4px 6px !important;
      border-radius:2px;
      border:1px solid var(--rv-border);
      background: var(--rv-bg);
      color: var(--rv-fg);
 }
-#rv-format #rv-find-count {
+#rv-find-count {
      margin-left:4px;
      opacity:0.9;
      font-size:13px;
      white-space:nowrap;
 }
-.rv-tts-active {
-    background: rgba(255, 255, 0, 0.3) !important;
-    transition: background 0.3s ease;
+#rv-format {
 }
 #rv-toolbar input {
     vertical-align: middle !important;

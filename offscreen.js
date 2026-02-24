@@ -10,14 +10,6 @@
 //
 // Background is a message relay only.
 
-function emit(tabId, type, payload) {
-  chrome.runtime
-    .sendMessage({
-      type: "tts.forwardToTab",
-      payload: { tabId, type, payload },
-    })
-    .catch();
-}
 
 // --------------------------
 // Server definitions + sanitization
@@ -40,7 +32,7 @@ const SERVERS = new Map([
   [Server.VOX_ANE, { port: 9000, min_len: 5, streamable: true }],
   [
     Server.SUPERTONIC,
-    { port: 8001, min_len: 5, sanitizer: sanitizeSupertonic, streamable: true },
+    { port: 8001, min_len: 5, sanitizer: sanitizeSupertonic, streamable: false },
   ],
   [
     Server.POCKET,
@@ -187,13 +179,16 @@ const ABBREVIATION_MAP = {
   "Mrs.": "Misses",
   "Ms.": "Miss",
   "Dr.": "Doctor",
+  "i.e.": "that is",
+  "e.g": "for example",
+  "a.k.a.": "also known as",
   "V.": "versus",
   "v.": "versus",
   "A.I.": "eigh eye",
-  AI: "eigh eye",
-  MacOS: "mac oh ess",
+  "AI": "eigh eye",
+  "MacOS": "mac oh ess",
   "lbs.": "pounds",
-  lbs: "pounds",
+  "lbs": "pounds",
   "Prof.": "Professor",
   "Bros.": "Brothers",
   "Sr.": "Senior",
@@ -649,11 +644,33 @@ async function synthesizeToCache(st, key, index) {
 
 async function streamPlayAndCache(tabId, st, index) {
   const key = cacheKey(st, index);
+
+  // 1. If already in cache, play it immediately.
+  if (st.cache.has(key)) {
+    return await playFromCache(tabId, st, index);
+  }
+
+  // 2. Abort existing prefetch and switch to stream for lower latency
+  // we're better that time to first audio for /stream < /synthesize to finish
+  // which may not be true always, but probably true most of the time
   if (st.inFlight.has(key)) {
-    await st.inFlight.get(key);
+    const prefetchTask = st.inFlight.get(key);
+
+    // Kill the prefetch's network request
+    st.aborts.get(key)?.abort();
+
+    // Await the task so its 'finally' block clears st.inFlight and st.aborts
+    try {
+      await prefetchTask;
+    } catch (e) {
+      // Ignore AbortError
+    }
+
+    // If it finished just as we aborted, use the cache
     if (st.cache.has(key)) return await playFromCache(tabId, st, index);
   }
 
+  // 3. Proceed with fresh streaming request
   const text = st.texts.get(index) || "";
   const serverId = st.server;
   const cfg = SERVERS.get(serverId);
@@ -694,7 +711,7 @@ async function streamPlayAndCache(tabId, st, index) {
     let sampleRate = null;
     if (!isWav) {
       const m = ctype.match(/rate\s*=\s*(\d+)/);
-      sampleRate = m ? parseInt(m[1], 10) : 44100;
+      sampleRate = m ? parseInt(m[1], 10) : 24000;
     }
 
     const player = new StreamingPlayer(sampleRate);
@@ -744,7 +761,7 @@ async function streamPlayAndCache(tabId, st, index) {
       } else {
         // Handle raw PCM cache storage (assume mono)
         const frames = Math.floor(fullU8.length / 2);
-        audioBuffer = ctx.createBuffer(1, frames, sampleRate || 22050);
+        audioBuffer = ctx.createBuffer(1, frames, sampleRate || 24000);
         const i16 = new Int16Array(fullU8.buffer, 0, frames);
         const out = audioBuffer.getChannelData(0);
         for (let i = 0; i < frames; i++) out[i] = i16[i] / 32768;
@@ -806,13 +823,13 @@ async function ensurePrefetchLoop(st) {
     while (st.queue.size > 0 && st.prefetchGateOpened) {
       // javascript Set preserves insertion order
       // key == first item added
-      const key = st.queue.values().next().value;
+      const key = st.queue.keys().next().value;
       st.queue.delete(key);
 
       // Skip if already cached (e.g. from a previous session)
       if (st.cache.has(key)) continue;
 
-      const idx = Number(key.split(":").shift());
+      const idx = Number(key.split(":", 1)[0]);
 
       try {
         // 3. THIS IS THE BLOCKER:
@@ -853,9 +870,9 @@ function enqueuePrefetch(st, index) {
 
 function pruneMap(signature, map, startIndex, endIndex, _log, isAbort = false) {
   for (const key of map.keys()) {
-    let [idx, sig] = key.split(":");
+    let [idx, sig] = key.split(":", 2);
     idx = Number(idx);
-    if (sig != signature || idx < startIndex - 1 || idx > endIndex) {
+    if (sig !== signature || idx < startIndex - 1 || idx > endIndex) {
       if (isAbort) {
         const ac = map.get(key);
         try {
@@ -871,14 +888,7 @@ function pruneMap(signature, map, startIndex, endIndex, _log, isAbort = false) {
 function pruneOutsideOfWindow(st, startIndex, endIndex) {
   const signature = sig(st);
   pruneMap(signature, st.cache, startIndex, endIndex, "Pruning");
-  pruneMap(
-    signature,
-    st.aborts,
-    startIndex,
-    endIndex,
-    "Aborting",
-    (isAbort = true),
-  );
+  pruneMap(signature, st.aborts, startIndex, endIndex, "Aborting", true);
   pruneMap(signature, st.inFlight, startIndex, endIndex, "Cancelling");
 }
 
@@ -995,6 +1005,15 @@ async function handleCleanup(tabId) {
 // --------------------------
 // Message handlers
 // --------------------------
+
+function emit(tabId, type, payload) {
+  chrome.runtime
+    .sendMessage({
+      type: "tts.forwardToTab",
+      payload: { tabId, type, payload },
+    })
+    .catch();
+}
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || !msg.type) return;

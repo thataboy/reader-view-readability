@@ -388,14 +388,14 @@
       tts.highlightSpan = span;
       if (!tts.playing) span.classList.add("rv-tts-inactive");
       if (tts.scrl.checked)
-        span.scrollIntoView({ block: "center", behavior: "instant" });
+        span.scrollIntoView({ block: "center", behavior: "smooth" });
     } catch (e) {
       // Fallback: just highlight the whole paragraph/element
       m.el.classList.add("rv-tts-highlight");
       if (!tts.playing) span.classList.add("rv-tts-inactive");
       tts.highlightSpan = m.el;
       if (tts.scrl.checked)
-        m.el.scrollIntoView({ block: "center", behavior: "instant" });
+        m.el.scrollIntoView({ block: "center", behavior: "smooth" });
     }
   }
 
@@ -450,11 +450,10 @@
   // --------------------------
   // UI + overlay
   // --------------------------
-  function buildOverlay(article) {
+  function buildOverlay() {
     overlay = document.createElement("div");
     overlay.id = "reader-view-overlay";
     const hideSmall = isSmallScrn ? 'style="display:none" ' : '';
-    const svgSize = isSmallScrn ? 'width="20" height="20"' : 'width="24" height="24"';
     overlay.innerHTML = `
       <div id="rv-surface" role="dialog" aria-label="Reader View" tabindex="-1">
         <div id="rv-toolbar">
@@ -549,7 +548,7 @@
           </div>
           <div id="rv-toolbar-rhs">
             <button class="rv-btn" id="rv-find-btn">
-            <svg viewBox="0 0 24 24" ${svgSize}
+            <svg viewBox="0 0 24 24" width="20" height="20"
               fill="none" stroke="white" stroke-width="1.7"
               stroke-linecap="round" stroke-linejoin="round"
               aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -576,9 +575,9 @@
                 </svg>
               </button>
             </div>
-            <input id="rv-scrl" type="checkbox"/><label for="rv-scrl">${isSmallScrn ? '':'Auto'}Scroll</label>
+            <input id="rv-scrl" type="checkbox"/><label for="rv-scrl">${isSmallScrn ? 'scrl':'AutoScroll'}</label>
             <button class="rv-btn" id="rv-font-inc" title="Increase font">
-            <svg viewBox="0 0 24 24" ${svgSize}
+            <svg viewBox="0 0 24 24" width="20" height="20"
               fill="none" stroke="white" stroke-width="1.7"
               stroke-linecap="round" stroke-linejoin="round"
               aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -589,7 +588,7 @@
             </svg>
             </button>
             <button class="rv-btn" id="rv-font-dec" title="Decrease font">
-            <svg viewBox="0 0 24 24" ${svgSize}
+            <svg viewBox="0 0 24 24" width="20" height="20"
               fill="none" stroke="white" stroke-width="1.6"
               stroke-linecap="round" stroke-linejoin="round"
               aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -599,7 +598,7 @@
             </svg>
             </button>
             <button class="rv-btn" id="rv-width-widen" ${hideSmall}title="Widen page">
-            <svg width="24px" height="24px" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+            <svg width="20" height="20" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
               <g>
                 <g>
                   <rect width="48" height="48" fill="none"/>
@@ -615,7 +614,7 @@
             </svg>
             </button>
             <button class="rv-btn" id="rv-width-narrow" ${hideSmall}title="Narrow page">
-            <svg width="24px" height="24px" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+            <svg width="20" height="20" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
               <g>
                 <g>
                   <rect width="48" height="48" fill="none"/>
@@ -634,8 +633,8 @@
           </div>
         </div>
         <div id="rv-content">
-          ${article.title ? `<h1>${article.title}</h1>` : ""}
-          ${article.byline ? `<p><em>${article.byline}</em></p>` : ""}
+          <h1 id="rv-article-title"></h1>
+          <p><em><span id="rv-article-byline">Loading...</span></em><p>
           <div id="rv-article-body"></div>
           <br/><br/>
         </div>
@@ -747,7 +746,7 @@
     if (!span) return;
 
     span.classList.add("active");
-    span.scrollIntoView({ behavior: "instant", block: "center" });
+    span.scrollIntoView({ behavior: "smooth", block: "center" });
 
     updateFindCounter();
   }
@@ -791,7 +790,10 @@
 
     input.addEventListener("input", () => {
       clearTimeout(timer);
-      timer = setTimeout(() => doFind(input.value), isAndroid ? 1000 : 300);
+      timer = setTimeout(() => doFind(input.value),
+        isAndroid || tts.texts.length > 1000
+        ? 1000
+        : 300);
     });
 
     input.addEventListener("keydown", e => {
@@ -857,6 +859,7 @@
     "Sgt",
     "Col",
     "Adm",
+    "etc",
     "U.S",
     "U.K",
     "A.I",
@@ -890,7 +893,7 @@
 
   // Helper: choose a split index (within str) for Vox long chunks.
   // Only split at ",", ";" or "--" near the middle. If nothing found, return -1.
-  function chooseVoxSplitIndex(str) {
+  function chooseSplitIndex(str) {
     const len = str.length;
     if (len < 2) return -1;
 
@@ -902,7 +905,7 @@
       const prev2 = str[i - 2];
       // split on , but not in number like 10,000
       if (prev === "," && !/[0-9]/.test(str[i])) return true;
-      if ([";", "—"].includes(prev)) return true;
+      if ([";", "—", ")", "]"].includes(prev)) return true;
       if (prev === "-" && prev2 === "-") return true; // "--"
       return false;
     };
@@ -973,7 +976,7 @@
       if (!spoken) return;
 
       if (MAX_CHARS && spoken.length > MAX_CHARS) {
-        const rel = chooseVoxSplitIndex(spoken);
+        const rel = chooseSplitIndex(spoken);
         if (rel > 0 && rel < spoken.length) {
           const splitAbs = s + rel;
           texts.push(spoken.slice(0, rel).trim());
@@ -1116,6 +1119,16 @@
     }
 
     const cloned = document.cloneNode(true);
+
+    buildOverlay();
+
+    prefs = await loadPrefs();
+    tts.server = prefs.server;
+
+    attachOverlay();
+    setupMiscControls();
+    await setupTTSControls();
+
     const REMOVE_SELECTORS = [
       "style",
       "script",
@@ -1181,24 +1194,20 @@
         .forEach((el) => el.remove());
     }
 
+    document.documentElement.classList.add("rv-active");
+
     const options = {
       classesToPreserve: [/header|caption|author/],
     };
     const article = new window.Readability(cloned, options).parse();
-    if (!article || !article.content) {
-      console.log("Readability returned no content.");
+
+    overlay.querySelector("#rv-article-byline").textContent = article?.byline || "";
+    const titleEl = overlay.querySelector("#rv-article-title");
+    if (!article?.content) {
+      titleEl.textContent = "Readability returned no content.";
       return;
     }
-
-    document.documentElement.classList.add("rv-active");
-    buildOverlay(article);
-
-    prefs = await loadPrefs();
-    tts.server = prefs.server;
-
-    attachOverlay();
-    setupMiscControls();
-    await setupTTSControls();
+    titleEl.textContent = article.title;
 
     const savedProgress = prefs.readingProgress[currentPageUrl];
     tts.index = savedProgress?.index || 0;

@@ -181,7 +181,7 @@ const ABBREVIATION_MAP = {
   "Dr.": "Doctor",
   "i.e.": "that is",
   "e.g": "for example",
-  "a.k.a.": "also known as",
+  "etc.": "edt cetera",
   "V.": "versus",
   "v.": "versus",
   "A.I.": "eigh eye",
@@ -502,6 +502,7 @@ const tabs = new Map();
 //   cache: Map<string, { sampleRate:number, pcmU8:Uint8Array } | { audioBuffer: AudioBuffer }>,
 //   decodeCtx: AudioContext | null,
 //   aborts: Map<string, AbortController>,    // key -> controller
+//   stops: Map<string, AbortController>,     // key -> controller
 //   inFlight: Map<string, Promise<void>>,    // key -> promise that stores cache
 //   queue: Set<string>, // set of segment keys (index:signature)
 //   prefetchRunning: boolean,
@@ -521,7 +522,8 @@ function getTab(tabId) {
       texts: new Map(),
       cache: new Map(),
       decodeCtx: null,
-      aborts: new Map(),
+      aborts: new Map(),    // abort controllers for network access
+      stops: new Map(),     // abort controllers for audiocontext playback
       inFlight: new Map(),
       queue: new Set(),
       prefetchRunning: false,
@@ -579,6 +581,12 @@ function abortAll(st) {
     } catch {}
   }
   st.aborts.clear();
+  for (const ac of st.stops.values()) {
+    try {
+      ac.abort();
+    } catch {}
+  }
+  st.stops.clear();
   st.inFlight.clear();
 }
 
@@ -691,6 +699,8 @@ async function streamPlayAndCache(tabId, st, index) {
 
   const ac = new AbortController();
   st.aborts.set(key, ac);
+  const pac = new AbortController();
+  st.stops.set(key, pac);
   await stopCurrent("superseded");
 
   try {
@@ -715,7 +725,7 @@ async function streamPlayAndCache(tabId, st, index) {
     }
 
     const player = new StreamingPlayer(sampleRate);
-    current = { tabId, key, signature, index, abort: ac, player };
+    current = { tabId, key, signature, index, abort: pac, player };
     await player.start();
 
     const reader = r.body.getReader();
@@ -729,6 +739,7 @@ async function streamPlayAndCache(tabId, st, index) {
       // Abort if context changed
       if (!current) {
         ac.abort();
+        pac.abort();
         return;
       }
 
@@ -775,6 +786,7 @@ async function streamPlayAndCache(tabId, st, index) {
     await stopCurrent("error");
   } finally {
     st.aborts.delete(key);
+    st.stops.delete(key);
     await stopCurrent("natural");
   }
 }
@@ -787,7 +799,7 @@ async function playFromCache(tabId, st, index) {
   await stopCurrent("superseded");
 
   const ac = new AbortController();
-  st.aborts.set(key, ac);
+  st.stops.set(key, ac);
   const ctx = getDecodeCtx(st);
   const player = new CachePlayer({ ctx });
 
@@ -801,7 +813,7 @@ async function playFromCache(tabId, st, index) {
 
   await player.waitEnded(ac.signal);
 
-  st.aborts.delete(key);
+  st.stops.delete(key);
 
   if (current && current.tabId === tabId) {
     await stopCurrent("natural");
@@ -889,6 +901,7 @@ function pruneOutsideOfWindow(st, startIndex, endIndex) {
   const signature = sig(st);
   pruneMap(signature, st.cache, startIndex, endIndex, "Pruning");
   pruneMap(signature, st.aborts, startIndex, endIndex, "Aborting", true);
+  pruneMap(signature, st.stops, startIndex, endIndex, "Stopping", true);
   pruneMap(signature, st.inFlight, startIndex, endIndex, "Cancelling");
 }
 

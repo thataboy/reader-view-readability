@@ -196,6 +196,7 @@ html.rv-active body {
     align-items: center;
     gap: 4px 4px;
     justify-content: center;
+    margin: 0;
 }
 #rv-toolbar-rhs {
     margin-left: auto;
@@ -220,11 +221,11 @@ html.rv-active body {
      font-size:13px;
      white-space:nowrap;
 }
-#rv-format {
-}
 #rv-toolbar input {
+    appearance: auto !important;
+    border: revert;
     vertical-align: middle !important;
-    margin: auto 0 auto 6px !important;
+    margin: auto 4px !important;
     padding: 0 !important;
 }
 #rv-toolbar select {
@@ -234,16 +235,18 @@ html.rv-active body {
     margin: 0;
 }
 #rv-toolbar label {
-    font-size: 14px;
-    margin: 0 4px 0 2px;
-    padding: 0;
-    display: inline-flex;
+    appearance: auto !important;
+    font-size: 14px !important;
+    margin: 0 !important;
+    padding: 0 4px !important;
+    display: inline !important;
+    clear: none !important;
     vertical-align: middle !important;
 }
 #rv-toolbar label[for] {
-    cursor: pointer;
-    font-size: 13px;
-    font-variant: small-caps;
+    padding: 0 4px 0 2px !important;
+    font-size: 13px !important;
+    font-variant: small-caps !important;
 }
 #rv-tts-status,
 #rv-speed-label {

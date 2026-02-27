@@ -545,6 +545,10 @@
             </button>
             </div>
             <span id="rv-tts-status"></span>
+            <div id="rv-jump-div" style="display:none">
+              <input id="rv-jump-input" type="number" inputmode="numeric" step="1"
+                  style="width:${isSmallScrn ? '30px' : '50px'};"/>
+            </div>
           </div>
           <div id="rv-toolbar-rhs">
             <button class="rv-btn" id="rv-find-btn">
@@ -889,9 +893,9 @@
 
   const RE_ABBREV_FALLBACK = /[^A-Z.]([A-Z]\.)+$/;
   const RE_ABBREV_MATCH = /[^A-Za-z.]([A-Za-z.]+)\.$/;
-  const SEGMENTER = new Intl.Segmenter(undefined, { granularity: "sentence" });
+  const SEGMENTER = new Intl.Segmenter(_lang, { granularity: "sentence" });
 
-  // Helper: choose a split index (within str) for Vox long chunks.
+  // Helper: choose a split index (within str) for long chunks.
   // Only split at ",", ";" or "--" near the middle. If nothing found, return -1.
   function chooseSplitIndex(str) {
     const len = str.length;
@@ -905,7 +909,7 @@
       const prev2 = str[i - 2];
       // split on , but not in number like 10,000
       if (prev === "," && !/[0-9]/.test(str[i])) return true;
-      if ([";", "—", ")", "]"].includes(prev)) return true;
+      if ([";", "–", "—", ")", "]"].includes(prev)) return true;
       if (prev === "-" && prev2 === "-") return true; // "--"
       return false;
     };
@@ -1100,8 +1104,10 @@
       if (tts.index + 1 >= tts.texts.length) tts.index = 0;
     }
 
-    highlightCurrent();
-    setStatus();
+    setTimeout(() => {
+      highlightCurrent();
+      setStatus();
+    }, Math.floor(tts.texts.length / 5));
   }
 
   // --------------------------
@@ -1466,7 +1472,9 @@
     }
     if (e.key === "Escape") {
       e.preventDefault();
-      if (overlay?.querySelector("#rv-find-panel")?.style.display === "flex")
+      if (tts.statusEl?.style.display === "none") {
+        tts.statusEl.click();
+      } else if (overlay?.querySelector("#rv-find-panel")?.style.display === "flex")
         overlay.querySelector("#rv-find-btn").click();
       else
         cleanup();
@@ -1563,6 +1571,42 @@
 
     // Toolbar handlers
     overlay.querySelector("#rv-close").addEventListener("click", cleanup);
+
+    const jumpDiv = overlay.querySelector("#rv-jump-div");
+    const jumpInp = overlay.querySelector("#rv-jump-input");
+    tts.statusEl.addEventListener("click", () => {
+      if (tts.statusEl.style.display === "none") {
+        jumpDiv.style.display = "none";
+        tts.statusEl.style.display = "inherit";
+      } else {
+        jumpDiv.style.display = "inline";
+        tts.statusEl.style.display = "none";
+        if (!jumpInp.value) jumpInp.value = tts.index;
+        jumpInp.focus();
+        jumpInp.select();
+        jumpInp.placeholder = `${tts.index} / ${tts.texts.length}`;
+      }
+    });
+    jumpInp.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        let idx = jumpInp.value.trim();
+        if (idx === "") return;
+        idx = Number(idx);
+        if (!isFinite(idx) || idx < 0 || idx >= tts.texts.length) return;
+        idx = Math.floor(idx);
+        jumpInp.value = idx;
+        tts.index = idx;
+        if (tts.playing) restartAudio();
+        else {
+          highlightCurrent();
+          setStatus();
+        }
+      }
+    });
+    jumpInp.addEventListener("blur", () => {
+      if (jumpDiv.style.display !== "none") tts.statusEl.click();
+    });
 
     initFindUI();
 

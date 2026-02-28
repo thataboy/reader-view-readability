@@ -45,8 +45,9 @@
     ],
   ]);
 
-  const isSmallScrn = window.matchMedia('(max-width: 720px)').matches;
+  // const isSmallScrn = window.matchMedia('(max-width: 720px)').matches;
   const isAndroid = navigator.userAgent.includes("ndroid");
+  const isSmallScrn = isAndroid;
 
   let prefs = null; // saved preferences
   let overlay = null; // reader view overlay
@@ -125,8 +126,8 @@
 
   // Show status message to user
   // set msg to '' or omit to show playing status
-  function setStatus(msg = "") {
-    if (msg === "") {
+  function setStatus(msg = null) {
+    if (!msg) {
       msg = `${tts.playing ? "▶️" : "Ready"} ${tts.index + 1} / ${tts.texts.length}`;
     }
     tts.statusEl.textContent = msg;
@@ -140,7 +141,7 @@
       highlightCurrent();
       return;
     }
-    stopPlayback();
+    stopPlayback(tts.playing);
     highlightCurrent();
     scheduleAt(idx);
   }
@@ -191,7 +192,7 @@
     }
   }
 
-  function stopPlayback(notifyBackground=true) {
+  function stopPlayback(notifyBackground) {
     if (notifyBackground)
       chrome.runtime.sendMessage({ type: "tts.stop", payload: {} }).catch();
 
@@ -206,7 +207,7 @@
   function restartAudio(continuePlay = true) {
     const wasPlaying = tts.playing;
 
-    stopPlayback();
+    stopPlayback(wasPlaying);
 
     if (wasPlaying && continuePlay)
       setTimeout(() => {
@@ -276,8 +277,8 @@
 
       if (msg.type === "tts.ended") {
         if (!tts.playing) return;
-        if (p.reason && p.reason !== "natural") {
-          stopPlayback((notifyBackground=false));
+        if (p?.reason !== "natural") {
+          stopPlayback(false);
           return;
         }
         const next = tts.index + 1;
@@ -292,7 +293,7 @@
             scheduleAt(next);
           }
         } else {
-          stopPlayback();
+          stopPlayback(false);
           tts.index = 0;
           setStatus("Finished");
         }
@@ -300,7 +301,7 @@
       }
       if (msg.type === "tts.error") {
         setStatus("TTS error:", p.error);
-        stopPlayback();
+        stopPlayback(false);
         return;
       }
     });
@@ -649,6 +650,7 @@
     link.id = "rv-style-link";
     link.href = chrome.runtime.getURL("overlay.css");
     document.head.appendChild(link);
+    overlay.querySelector("#rv-article-title").textContent = document.title;
   }
 
   /* =========================
@@ -1000,7 +1002,6 @@
 
     for (const el of validContainers) {
       // Use matches() to skip sup/label and check containerSet to prevent double-reading nested blocks
-      let inBlockQuote = false;
       const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
         acceptNode: (n) => {
           const p = n.parentElement;
@@ -1008,7 +1009,6 @@
             return NodeFilter.FILTER_REJECT;
           if (SKIP_TEXTS.some((txt) => n.textContent.includes(txt)))
             return NodeFilter.FILTER_REJECT;
-          if (p.matches("blockquote, blockquote *")) inBlockQuote = true;
 
           let walk = p;
 
@@ -1026,13 +1026,6 @@
         plain += n.nodeValue;
       }
       if (!plain) continue;
-
-      // fix for <blockquote> text somehow getting turned into
-      // " ...... "
-      // " ...... "
-      // which screws up our segmenting
-      if (inBlockQuote)
-        plain = plain.replace(/["\r\n]/g, " ").replace(/\s{2,}/g, " ");
 
       const segments = SEGMENTER.segment(plain);
       let groupStart = -1;
@@ -1107,34 +1100,10 @@
     setTimeout(() => {
       highlightCurrent();
       setStatus();
-    }, Math.floor(tts.texts.length / 5));
+    }, Math.floor(tts.index / 5));
   }
 
-  // --------------------------
-  // Main toggle function
-  // --------------------------
-  async function toggle() {
-    const existing = document.getElementById("reader-view-overlay");
-    if (existing) {
-      existing.querySelector("#rv-close")?.click();
-      return;
-    }
-    if (!window.Readability) {
-      console.error("Readability not found. Inject readability.js first.");
-      return;
-    }
-
-    const cloned = document.cloneNode(true);
-
-    buildOverlay();
-
-    prefs = await loadPrefs();
-    tts.server = prefs.server;
-
-    attachOverlay();
-    setupMiscControls();
-    await setupTTSControls();
-
+  function preprocessDoc(cloned) {
     const REMOVE_SELECTORS = [
       "style",
       "script",
@@ -1173,6 +1142,7 @@
         break;
       }
     }
+
     cloned
       .querySelectorAll(REMOVE_SELECTORS.join(","))
       .forEach((el) => el.remove());
@@ -1193,27 +1163,79 @@
           el.remove();
       });
 
-    // if there is <article> remove all blocks not a descendant or ancestor of <article>
-    if (cloned.querySelector("article")) {
+    // if there is <article> or <main> remove all blocks not a descendant or ancestor of it
+    let _art = _main = _rma = '';
+    _art = cloned.querySelector('article') ? ':not(article *):not(:has(article))'  : "";
+    if (!_art)
+      _main = cloned.querySelector('main') ? ':not(main *):not(:has(main))'  : "";
+    if (!_art && !_main)
+      _rma = cloned.querySelector('[role="main"]') ? ':not([role="main"] *):not(:has([role="main"]))'  : "";
+
+    if (_art || _main || _rma) {
       cloned
-        .querySelectorAll(`:is(${BLOCKS}):not(article *):not(:has(article))`)
+        .querySelectorAll(`:is(${BLOCKS})${_art}${_main}${_rma}`)
         .forEach((el) => el.remove());
     }
 
+    // replace \r|\n in text nodes or Intl.Segmenter will split on \r|\n
+    (() => {
+      const walker = document.createTreeWalker(
+        cloned,
+        NodeFilter.SHOW_TEXT,
+        null,
+        false
+      );
+
+      let node;
+      while ((node = walker.nextNode())) {
+        node.textContent = node.textContent
+          .replace(/[\r\n]/g, " ")
+          .replace(/\s{2,}/g, " ");
+      }
+    })();
+
+  }
+
+  // --------------------------
+  // Main toggle function
+  // --------------------------
+  async function toggle() {
+    const existing = document.getElementById("reader-view-overlay");
+    if (existing) {
+      existing.querySelector("#rv-close")?.click();
+      return;
+    }
+    if (!window.Readability) {
+      console.error("Readability not found. Inject readability.js first.");
+      return;
+    }
+
+
+    prefs = await loadPrefs();
+    tts.server = prefs.server;
+
+    const cloned = document.cloneNode(true);
+
+    buildOverlay();
+    attachOverlay();
+    setupMiscControls();
+    await setupTTSControls();
+
     document.documentElement.classList.add("rv-active");
+
+    preprocessDoc(cloned);
 
     const options = {
       classesToPreserve: [/header|caption|author/],
     };
     const article = new window.Readability(cloned, options).parse();
 
-    overlay.querySelector("#rv-article-byline").textContent = article?.byline || "";
-    const titleEl = overlay.querySelector("#rv-article-title");
+    const byline = overlay.querySelector("#rv-article-byline");
     if (!article?.content) {
-      titleEl.textContent = "Readability returned no content.";
+      byline.textContent = "Readability returned no content.";
       return;
     }
-    titleEl.textContent = article.title;
+    byline.textContent = article.byline;
 
     const savedProgress = prefs.readingProgress[currentPageUrl];
     tts.index = savedProgress?.index || 0;
@@ -1723,7 +1745,7 @@
             tts.voiceEl.value = keep;
             tts.voice = keep;
           }
-          setStatus("Voices refreshed");
+          setStatus();
         } catch {
           setStatus("Refresh failed");
         } finally {
@@ -1753,7 +1775,7 @@
     };
 
     tts.btnStop.onclick = () => {
-      stopPlayback();
+      stopPlayback(true);
       // saveReadingProgress();
     };
 

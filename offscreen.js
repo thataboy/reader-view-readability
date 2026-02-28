@@ -165,10 +165,13 @@ function sanitizeCommon(text) {
       // Arrows, dingbats, geometric shapes, miscellaneous symbols, etc.
       .replace(/[\u2190-\u21FF\u25A0-\u25FF\u2600-\u26FF\u2700-\u27BF]+/g, "")
 
-      // !!! and ???
+      // line contains only same symbol repeated, like ------
+      .replace(/^([^A-Za-z0-9])\1*$/, '')
+
+      // !!! and ??? -> ! and ?
       .replace(/([!?.])\1+/g, "$1")
 
-      .replace(/\s+/g, " ")
+      .replace(/\s{2,}/g, " ")
       .trim()
   );
 }
@@ -310,8 +313,7 @@ function tryParseWavHeader(u8) {
 
 class StreamingPlayer {
   constructor(defaultSampleRate = null) {
-    const AudioCtx = self.AudioContext;
-    this.ctx = new AudioCtx({ latencyHint: "playback" });
+    this.ctx = new AudioContext({ latencyHint: "playback" });
 
     // If null, we'll wait for a WAV header to define it
     this.sampleRate = defaultSampleRate;
@@ -502,7 +504,6 @@ const tabs = new Map();
 //   cache: Map<string, { sampleRate:number, pcmU8:Uint8Array } | { audioBuffer: AudioBuffer }>,
 //   decodeCtx: AudioContext | null,
 //   aborts: Map<string, AbortController>,    // key -> controller
-//   stops: Map<string, AbortController>,     // key -> controller
 //   inFlight: Map<string, Promise<void>>,    // key -> promise that stores cache
 //   queue: Set<string>, // set of segment keys (index:signature)
 //   prefetchRunning: boolean,
@@ -523,7 +524,6 @@ function getTab(tabId) {
       cache: new Map(),
       decodeCtx: null,
       aborts: new Map(),    // abort controllers for network access
-      stops: new Map(),     // abort controllers for audiocontext playback
       inFlight: new Map(),
       queue: new Set(),
       prefetchRunning: false,
@@ -544,9 +544,7 @@ function cacheKey(st, index) {
 }
 
 function getDecodeCtx(st) {
-  if (st.decodeCtx) return st.decodeCtx;
-  const AudioCtx = self.AudioContext;
-  st.decodeCtx = new AudioCtx({ latencyHint: "playback" });
+  st.decodeCtx ||= new AudioContext({ latencyHint: "playback" });
   return st.decodeCtx;
 }
 
@@ -581,12 +579,6 @@ function abortAll(st) {
     } catch {}
   }
   st.aborts.clear();
-  for (const ac of st.stops.values()) {
-    try {
-      ac.abort();
-    } catch {}
-  }
-  st.stops.clear();
   st.inFlight.clear();
 }
 
@@ -699,8 +691,6 @@ async function streamPlayAndCache(tabId, st, index) {
 
   const ac = new AbortController();
   st.aborts.set(key, ac);
-  const pac = new AbortController();
-  st.stops.set(key, pac);
   await stopCurrent("superseded");
 
   try {
@@ -724,8 +714,8 @@ async function streamPlayAndCache(tabId, st, index) {
       sampleRate = m ? parseInt(m[1], 10) : 24000;
     }
 
-    const player = new StreamingPlayer(sampleRate);
-    current = { tabId, key, signature, index, abort: pac, player };
+    const player = new StreamingPlayer();
+    current = { tabId, key, signature, index, abort: ac, player };
     await player.start();
 
     const reader = r.body.getReader();
@@ -739,7 +729,6 @@ async function streamPlayAndCache(tabId, st, index) {
       // Abort if context changed
       if (!current) {
         ac.abort();
-        pac.abort();
         return;
       }
 
@@ -750,10 +739,12 @@ async function streamPlayAndCache(tabId, st, index) {
       if (player.didStartPlayback && !current.notified) {
         current.notified = true;
         emit(tabId, "tts.playing", { index });
-        st.prefetchGateOpened = true;
-        ensurePrefetchLoop(st);
       }
     }
+
+    // start prefetch when stream done fetching
+    st.prefetchGateOpened = true;
+    ensurePrefetchLoop(st);
 
     // Decode full stream to cache for future replays
     if (totalLen > 0) {
@@ -764,7 +755,7 @@ async function streamPlayAndCache(tabId, st, index) {
         off += c.length;
       }
 
-      const ctx = getDecodeCtx(st);
+      const ctx = new AudioContext();
       let audioBuffer;
 
       if (isWav) {
@@ -772,7 +763,7 @@ async function streamPlayAndCache(tabId, st, index) {
       } else {
         // Handle raw PCM cache storage (assume mono)
         const frames = Math.floor(fullU8.length / 2);
-        audioBuffer = ctx.createBuffer(1, frames, sampleRate || 24000);
+        audioBuffer = ctx.createBuffer(1, frames, sampleRate);
         const i16 = new Int16Array(fullU8.buffer, 0, frames);
         const out = audioBuffer.getChannelData(0);
         for (let i = 0; i < frames; i++) out[i] = i16[i] / 32768;
@@ -786,7 +777,6 @@ async function streamPlayAndCache(tabId, st, index) {
     await stopCurrent("error");
   } finally {
     st.aborts.delete(key);
-    st.stops.delete(key);
     await stopCurrent("natural");
   }
 }
@@ -799,7 +789,7 @@ async function playFromCache(tabId, st, index) {
   await stopCurrent("superseded");
 
   const ac = new AbortController();
-  st.stops.set(key, ac);
+  st.aborts.set(key, ac);
   const ctx = getDecodeCtx(st);
   const player = new CachePlayer({ ctx });
 
@@ -813,7 +803,7 @@ async function playFromCache(tabId, st, index) {
 
   await player.waitEnded(ac.signal);
 
-  st.stops.delete(key);
+  st.aborts.delete(key);
 
   if (current && current.tabId === tabId) {
     await stopCurrent("natural");
@@ -901,7 +891,6 @@ function pruneOutsideOfWindow(st, startIndex, endIndex) {
   const signature = sig(st);
   pruneMap(signature, st.cache, startIndex, endIndex, "Pruning");
   pruneMap(signature, st.aborts, startIndex, endIndex, "Aborting", true);
-  pruneMap(signature, st.stops, startIndex, endIndex, "Stopping", true);
   pruneMap(signature, st.inFlight, startIndex, endIndex, "Cancelling");
 }
 

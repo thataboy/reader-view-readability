@@ -104,7 +104,7 @@
     texts: [],
     index: 0,
     playing: false,
-    prefetchAhead: 3, // # TTS segments to prefetch
+    prefetchAhead: isAndroid ? 2 : 3, // # TTS segments to prefetch
     statusEl: null, // status label
     voiceEl: null, // voice list control
     btnPlay: null,
@@ -300,8 +300,9 @@
         return;
       }
       if (msg.type === "tts.error") {
-        setStatus("TTS error:", p.error);
+        console.log(p.error);
         stopPlayback(false);
+        setStatus(`TTS error: ${p.error}`);
         return;
       }
     });

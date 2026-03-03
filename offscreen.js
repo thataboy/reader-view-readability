@@ -312,11 +312,10 @@ function tryParseWavHeader(u8) {
 }
 
 class StreamingPlayer {
-  constructor(defaultSampleRate = null) {
-    this.ctx = new AudioContext({ latencyHint: "playback" });
+  constructor(ctx, sampleRate) {
+    this.ctx = ctx;
 
-    // If null, we'll wait for a WAV header to define it
-    this.sampleRate = defaultSampleRate;
+    this.sampleRate = sampleRate;
     this.numChannels = 1;
 
     this.pcmData = new Uint8Array(0);
@@ -325,18 +324,23 @@ class StreamingPlayer {
     this.didStartPlayback = false;
     this._lastSrc = null;
 
-    // Header parsing state
     this.headerFound = false;
     this.headerBuf = [];
     this.headerLen = 0;
+    this.gain = this.ctx.createGain();
+    this.gain.connect(this.ctx.destination);
   }
 
   async start() {
     if (this.ctx.state === "suspended") await this.ctx.resume();
+    this.gain.gain.setValueAtTime(1, this.ctx.currentTime);
+    // Reset timing based on shared context
+    this.nextStartTime = this.ctx.currentTime;
   }
 
   _appendBytes(newData) {
-    if (!newData || newData.length === 0) return;
+    if (!newData?.length) return;
+
     const merged = new Uint8Array(this.pcmData.length + newData.length);
     merged.set(this.pcmData, 0);
     merged.set(newData, this.pcmData.length);
@@ -344,9 +348,8 @@ class StreamingPlayer {
   }
 
   async addChunk(chunk) {
-    if (!chunk || chunk.length === 0) return;
+    if (!chunk?.length) return;
 
-    // Phase 1: Determine Audio Parameters
     if (!this.sampleRate && !this.headerFound) {
       this.headerBuf.push(chunk);
       this.headerLen += chunk.length;
@@ -364,52 +367,57 @@ class StreamingPlayer {
         this.headerFound = true;
         // Seed PCM data with anything following the WAV header
         this._appendBytes(tmp.subarray(parsed.dataOffset));
-        this.headerBuf = []; // clear memory
+        this.headerBuf = [];  // clear memory
       } else if (this.headerLen > 1024) {
-        // Fallback: If we've seen 1KB and no WAV header, it's likely raw
-        // but we don't have a sample rate. This shouldn't happen with the route logic.
-        throw new Error("Could not determine sample rate from stream");
+        throw new Error("Unable to determine sample rate");
       }
     } else {
-      // Phase 2: Standard PCM ingestion
       this._appendBytes(chunk);
     }
 
-    if (this.sampleRate) this._tryPlayBuffer();
+    if (this.sampleRate) {
+      this._tryPlayBuffer();
+    }
   }
 
   _tryPlayBuffer() {
-    // Need 2 bytes for a single Int16 sample
     const bytesPerFrame = 2;
+
     if (
       this.pcmData.length <
       (this.didStartPlayback ? bytesPerFrame : this.minBufferSize)
-    )
-      return;
+    ) return;
 
-    const framesToPlay = Math.floor(this.pcmData.length / bytesPerFrame);
-    const bytesToPlay = framesToPlay * bytesPerFrame;
-    const dataToPlay = this.pcmData.subarray(0, bytesToPlay);
+    const frames = Math.floor(this.pcmData.length / bytesPerFrame);
+    const bytesToPlay = frames * bytesPerFrame;
+
+    const data = this.pcmData.subarray(0, bytesToPlay);
     this.pcmData = this.pcmData.subarray(bytesToPlay);
 
-    const audioBuffer = this.ctx.createBuffer(1, framesToPlay, this.sampleRate);
-    const int16 = new Int16Array(
-      dataToPlay.buffer,
-      dataToPlay.byteOffset,
-      framesToPlay,
+    const audioBuffer = this.ctx.createBuffer(
+      1,
+      frames,
+      this.sampleRate
     );
-    const out = audioBuffer.getChannelData(0);
 
-    for (let i = 0; i < framesToPlay; i++) {
+    const int16 = new Int16Array(
+      data.buffer,
+      data.byteOffset,
+      frames
+    );
+
+    const out = audioBuffer.getChannelData(0);
+    for (let i = 0; i < frames; i++) {
       out[i] = int16[i] / 32768;
     }
 
     const src = this.ctx.createBufferSource();
     src.buffer = audioBuffer;
-    src.connect(this.ctx.destination);
+    src.connect(this.gain);
 
     const now = this.ctx.currentTime;
     const startTime = Math.max(now, this.nextStartTime);
+
     src.start(startTime);
 
     this._lastSrc = src;
@@ -420,7 +428,6 @@ class StreamingPlayer {
   async finish({ timeoutMs = 15000 } = {}) {
     if (!this.sampleRate) return;
 
-    // Flush the remainder
     this.minBufferSize = 2;
     this._tryPlayBuffer();
 
@@ -436,14 +443,18 @@ class StreamingPlayer {
   }
 
   async stop() {
-    try {
-      if (this.ctx.state !== "closed") await this.ctx.close();
-    } catch {}
+    const now = this.ctx.currentTime;
+    // fade out volume; this quiets all chunks scheduled in the pipe
+    this.gain.gain.cancelScheduledValues(now);
+    this.gain.gain.setValueAtTime(this.gain.gain.value, now);
+    this.gain.gain.linearRampToValueAtTime(0, now + 0.01);
+    try { this._lastSrc?.stop(0); } catch {}
   }
 }
 
+
 class CachePlayer {
-  constructor({ ctx }) {
+  constructor(ctx) {
     this.ctx = ctx;
     this.gain = this.ctx.createGain();
     this.gain.connect(this.ctx.destination);
@@ -453,6 +464,9 @@ class CachePlayer {
 
   async startFromAudioBuffer(audioBuffer) {
     if (this.ctx.state === "suspended") await this.ctx.resume();
+    const now = this.ctx.currentTime;
+    this.gain.gain.cancelScheduledValues(now);
+    this.gain.gain.setValueAtTime(1, now);
 
     const src = this.ctx.createBufferSource();
     src.buffer = audioBuffer;
@@ -463,7 +477,7 @@ class CachePlayer {
       src.onended = resolve;
     });
 
-    src.start(0);
+    src.start(now);
   }
 
   async waitEnded(signal) {
@@ -478,17 +492,22 @@ class CachePlayer {
     ]);
   }
 
-  async stop() {
-    try {
-      this.source?.stop(0);
-    } catch {}
-    try {
-      this.source?.disconnect();
-    } catch {}
-    try {
-      this.gain?.disconnect();
-    } catch {}
-    // IMPORTANT: do NOT close ctx here (shared per-tab)
+  async stop(fadeMs = 50) {
+    if (!this.source) return;
+
+    const now = this.ctx.currentTime;
+    const fadeSec = fadeMs / 1000;
+
+    const srcToStop = this.source;  // capture current source
+
+    this.gain.gain.cancelScheduledValues(now);
+    this.gain.gain.setValueAtTime(this.gain.gain.value, now);
+    this.gain.gain.linearRampToValueAtTime(0, now + fadeSec);
+
+    setTimeout(() => {
+      try { srcToStop.stop(); } catch {}
+      try { srcToStop.disconnect(); } catch {}
+    }, fadeMs);
   }
 }
 
@@ -502,7 +521,6 @@ const tabs = new Map();
 //   server: number, voice: string, speed: number, lang: string,
 //   texts: Map<number,string>,
 //   cache: Map<string, { sampleRate:number, pcmU8:Uint8Array } | { audioBuffer: AudioBuffer }>,
-//   decodeCtx: AudioContext | null,
 //   aborts: Map<string, AbortController>,    // key -> controller
 //   inFlight: Map<string, Promise<void>>,    // key -> promise that stores cache
 //   queue: Set<string>, // set of segment keys (index:signature)
@@ -510,6 +528,9 @@ const tabs = new Map();
 // }
 
 let current = null; // { tabId, key, signature, index, abort, player }
+const decodeCtx = new AudioContext();
+const audioCtx = new AudioContext({ latencyHint: "playback" });
+const cachePlayer = new CachePlayer(audioCtx);
 
 function getTab(tabId) {
   let st = tabs.get(tabId);
@@ -522,8 +543,7 @@ function getTab(tabId) {
       lang: "en",
       texts: new Map(),
       cache: new Map(),
-      decodeCtx: null,
-      aborts: new Map(),    // abort controllers for network access
+      aborts: new Map(),
       inFlight: new Map(),
       queue: new Set(),
       prefetchRunning: false,
@@ -541,11 +561,6 @@ function sig(st) {
 
 function cacheKey(st, index) {
   return `${index}:${sig(st)}`;
-}
-
-function getDecodeCtx(st) {
-  st.decodeCtx ||= new AudioContext({ latencyHint: "playback" });
-  return st.decodeCtx;
 }
 
 function isTooShortForServer(cfg, body) {
@@ -629,8 +644,7 @@ async function synthesizeToCache(st, key, index) {
       const buf = await r.arrayBuffer();
       // decodeAudioData can detach the input buffer in some implementations.
       // Pass a copy to be safe.
-      const ctx = getDecodeCtx(st);
-      const audioBuffer = await ctx.decodeAudioData(buf.slice(0));
+      const audioBuffer = await decodeCtx.decodeAudioData(buf.slice(0));
       st.cache.set(key, { audioBuffer });
     } finally {
       st.aborts.delete(key);
@@ -707,14 +721,14 @@ async function streamPlayAndCache(tabId, st, index) {
     const ctype = (r.headers.get("content-type") || "").toLowerCase();
     const isWav = ctype.includes("wav");
 
-    // Determine sample rate if it's raw PCM
     let sampleRate = null;
     if (!isWav) {
+      // If not wav, assume raw PCM; try to determine sample rate
       const m = ctype.match(/rate\s*=\s*(\d+)/);
       sampleRate = m ? parseInt(m[1], 10) : 24000;
     }
 
-    const player = new StreamingPlayer();
+    const player = new StreamingPlayer(audioCtx, sampleRate);
     current = { tabId, key, signature, index, abort: ac, player };
     await player.start();
 
@@ -755,15 +769,14 @@ async function streamPlayAndCache(tabId, st, index) {
         off += c.length;
       }
 
-      const ctx = new AudioContext();
       let audioBuffer;
 
       if (isWav) {
-        audioBuffer = await ctx.decodeAudioData(fullU8.buffer.slice(0));
+        audioBuffer = await decodeCtx.decodeAudioData(fullU8.buffer.slice(0));
       } else {
         // Handle raw PCM cache storage (assume mono)
         const frames = Math.floor(fullU8.length / 2);
-        audioBuffer = ctx.createBuffer(1, frames, sampleRate);
+        audioBuffer = decodeCtx.createBuffer(1, frames, sampleRate);
         const i16 = new Int16Array(fullU8.buffer, 0, frames);
         const out = audioBuffer.getChannelData(0);
         for (let i = 0; i < frames; i++) out[i] = i16[i] / 32768;
@@ -790,8 +803,7 @@ async function playFromCache(tabId, st, index) {
 
   const ac = new AbortController();
   st.aborts.set(key, ac);
-  const ctx = getDecodeCtx(st);
-  const player = new CachePlayer({ ctx });
+  const player = cachePlayer;
 
   const signature = sig(st);
   current = { tabId, signature, key, index, abort: ac, player };
@@ -998,10 +1010,6 @@ async function handleCleanup(tabId) {
   const st = getTab(tabId);
   st.cache.clear();
   st.texts.clear();
-  if (st.decodeCtx) {
-    await st.decodeCtx.close().catch();
-    st.decodeCtx = null;
-  }
 }
 
 // --------------------------

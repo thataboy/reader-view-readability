@@ -1,6 +1,8 @@
 #reader-view-overlay {
     position: relative;
     z-index: 2147483647;
+    margin: 0;
+    padding: 0;
 }
 #rv-surface {
     position: fixed;
@@ -15,7 +17,7 @@
     line-height: 1.7em;
     overflow-y: scroll !important;
     overflow-x: hidden !important;
-    scrollbar-gutter: stable both-edges;
+    scrollbar-gutter: stable;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
     z-index: 2147483647;
@@ -109,7 +111,7 @@
     align-items: center;
     gap: 0px 0px;
     margin: 0;
-    padding: 3px 4px;
+    padding: 3px 4px 3px 0;
     background: var(--rv-panel);
     border: 1px solid var(--rv-border);
     backdrop-filter: saturate(120%) blur(6px);
@@ -171,7 +173,6 @@
     margin-right: 6px;
 }
 #rv-close {
-    margin-right: 6px;
 }
 #rv-voice, #rv-servers-sel {
     padding: 4px 6px !important;

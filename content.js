@@ -53,6 +53,7 @@
   let overlay = null; // reader view overlay
   let surface = null; // inner focusable div of overrlay
   let contentHost = null; // div where main content resides
+  let origHTML = null;
 
   // --------------------------
   // Storage helpers
@@ -453,7 +454,12 @@
   // UI + overlay
   // --------------------------
   function buildOverlay() {
-    overlay = document.createElement("div");
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.id = "rv-style-link";
+    link.href = chrome.runtime.getURL("overlay.css");
+    document.head.appendChild(link);
+    overlay = origHTML ? document.body : document.createElement("div");
     overlay.id = "reader-view-overlay";
     const hideSmall = isSmallScrn ? 'style="display:none" ' : '';
     overlay.innerHTML = `
@@ -646,11 +652,6 @@
         </div>
       </div>
     `;
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.id = "rv-style-link";
-    link.href = chrome.runtime.getURL("overlay.css");
-    document.head.appendChild(link);
     overlay.querySelector("#rv-article-title").textContent = document.title;
   }
 
@@ -815,7 +816,7 @@
   }
 
   function attachOverlay() {
-    document.getElementById("reader-view-overlay")?.remove();
+    document.querySelector("div#reader-view-overlay")?.remove();
 
     contentHost = overlay.querySelector("#rv-content");
     surface = overlay.querySelector("#rv-surface");
@@ -1201,9 +1202,8 @@
   // Main toggle function
   // --------------------------
   async function toggle() {
-    const existing = document.getElementById("reader-view-overlay");
-    if (existing) {
-      existing.querySelector("#rv-close")?.click();
+    if (document.getElementById("reader-view-overlay")) {
+      document.querySelector("#rv-close")?.click();
       return;
     }
     if (!window.Readability) {
@@ -1216,6 +1216,15 @@
     tts.server = prefs.server;
 
     const cloned = document.cloneNode(true);
+
+    if (document.documentElement.outerHTML.length > 150000) {
+      origHTML = document.documentElement.outerHTML;
+      const title = document.title;
+      document.open();
+      document.write('<!doctype html><html><head></head><body></body></html>');
+      document.close();
+      document.title = title;
+    }
 
     buildOverlay();
     attachOverlay();
@@ -1472,7 +1481,14 @@
     if (notifyBackground) {
       chrome.runtime.sendMessage({ type: "tts.cleanup", payload: {} }).catch();
     }
-    overlay?.remove();
+    if (origHTML) {
+      document.open();
+      document.write(origHTML);
+      document.close();
+      origHTML = null;
+    } else {
+      overlay?.remove();
+    }
     document.removeEventListener("keyup", onKey, true);
     document.removeEventListener("copy", onCopy, true);
     // outside.forEach(n => { try { n.removeAttribute("inert"); } catch(_){} });

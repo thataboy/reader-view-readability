@@ -23,9 +23,11 @@ const Server = Object.freeze({
   MLX: 6,
 });
 
-const SERVER_IP = navigator.userAgent.includes("Mac OS X")
+const SERVER_IP = navigator.userAgent.includes("Mac OS")
   ? "127.0.0.1"
   : "192.168.1.11";
+// number of segment behind current index to keep in cache
+const keepBehind = navigator.userAgent.includes("ndroid") ? 0 : 1;
 
 const SERVERS = new Map([
   [Server.MY_KOKORO, { port: 9090, min_len: 2, streamable: false }],
@@ -133,6 +135,7 @@ function sanitizePocket(text) {
       .replace(/[“”]/g, '"')
       .replace(/[‘’]/g, "'")
       .replace(/[[\]!]/g, "")
+      .replace(/\.\s*\.\s*\./g, ";")
       .replace(/(\d)\.(\d)/g, "$1 point $2")
       .replace(/([a-z]{2,3})\.([a-z]{2,3}\d)/g, "$1 dot $2")
       // remove extraneous punctuation after . ?
@@ -183,7 +186,7 @@ const ABBREVIATION_MAP = {
   "Ms.": "Miss",
   "Dr.": "Doctor",
   "i.e.": "that is",
-  "e.g": "for example",
+  "e.g.": "for example",
   "etc.": "edt cetera",
   "V.": "versus",
   "v.": "versus",
@@ -882,28 +885,20 @@ function enqueuePrefetch(st, index) {
 // Window handler
 // --------------------------
 
-function pruneMap(signature, map, startIndex, endIndex, _log, isAbort = false) {
-  for (const key of map.keys()) {
-    let [idx, sig] = key.split(":", 2);
-    idx = Number(idx);
-    if (sig !== signature || idx < startIndex - 1 || idx > endIndex) {
-      if (isAbort) {
-        const ac = map.get(key);
-        try {
-          ac.abort();
-        } catch {}
-      }
-      map.delete(key);
-      // console.log(`${log} ${key}`);
-    }
-  }
-}
-
 function pruneOutsideOfWindow(st, startIndex, endIndex) {
-  const signature = sig(st);
-  pruneMap(signature, st.cache, startIndex, endIndex, "Pruning");
-  pruneMap(signature, st.aborts, startIndex, endIndex, "Aborting", true);
-  pruneMap(signature, st.inFlight, startIndex, endIndex, "Cancelling");
+  [st.aborts, st.inFlight, st.cache].forEach(map => {
+    for (const key of map.keys()) {
+      const idx = Number(key.split(":", 1)[0]);
+      if (idx < startIndex - keepBehind || idx > endIndex) {
+        if (map == st.aborts) {
+          try {
+            map.get(key).abort();
+          } catch {}
+        }
+        map.delete(key);
+      }
+    }
+  });
 }
 
 async function handleWindow(p) {

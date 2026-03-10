@@ -197,10 +197,10 @@ html.rv-active body {
     align-items: center;
     gap: 4px 4px;
     justify-content: center;
-    margin: 0;
+    margin: 0 auto;
 }
 #rv-toolbar-rhs {
-    margin-left: auto;
+    margin: 0 0;
     justify-content: right;
 }
 #rv-find-panel {

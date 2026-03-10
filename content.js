@@ -53,7 +53,14 @@
   let overlay = null; // reader view overlay
   let surface = null; // inner focusable div of overrlay
   let contentHost = null; // div where main content resides
-  let origHTML = null;
+  const currentPageUrl = window.location.href.split(/[?#]/)[0]; // Use URL without query/hash
+  const _lang = (document.documentElement.lang || "en")
+    .substring(0, 2)
+    .toLowerCase();
+  // entire HTML to be replaced instead of just an overlay
+  const nuked =
+    /cnet\.com/.test(currentPageUrl)
+    || document.documentElement.outerHTML.length > 150000;
 
   // --------------------------
   // Storage helpers
@@ -120,10 +127,6 @@
 
   const LONG_PAGE_THRESHOLD = 100; // Minimum segments to consider a page "long"
   const MAX_SAVED_PAGES = 100; // Max number of saved reading positions
-  const currentPageUrl = window.location.href.split(/[?#]/)[0]; // Use URL without query/hash
-  const _lang = (document.documentElement.lang || "en")
-    .substring(0, 2)
-    .toLowerCase();
 
   // Show status message to user
   // set msg to '' or omit to show playing status
@@ -159,7 +162,7 @@
       // it sends the desired window [index..index+prefetchAhead] and offscreen decides
       // what to stream/play/prefetch and how to serialize requests.
       tts.playing = true;
-      tts.btnPlay.style.display = "none";
+      overlay.querySelector("#rv-speak-div").style.display = "none";
       tts.controls.style.display = "inherit";
       setStatus();
 
@@ -198,7 +201,7 @@
       chrome.runtime.sendMessage({ type: "tts.stop", payload: {} }).catch();
 
     tts.playing = false;
-    tts.btnPlay.style.display = "inherit";
+    overlay.querySelector("#rv-speak-div").style.display = "inherit";
     tts.controls.style.display = "none";
 
     highlightReading();
@@ -459,7 +462,7 @@
     link.id = "rv-style-link";
     link.href = chrome.runtime.getURL("overlay.css");
     document.head.appendChild(link);
-    overlay = origHTML ? document.body : document.createElement("div");
+    overlay = nuked ? document.body : document.createElement("div");
     overlay.id = "reader-view-overlay";
     const hideSmall = isSmallScrn ? 'style="display:none" ' : '';
     overlay.innerHTML = `
@@ -1211,14 +1214,12 @@
       return;
     }
 
-
     prefs = await loadPrefs();
     tts.server = prefs.server;
 
     const cloned = document.cloneNode(true);
 
-    if (document.documentElement.outerHTML.length > 150000) {
-      origHTML = document.documentElement.outerHTML;
+    if (nuked) {
       const title = document.title;
       document.open();
       document.write('<!doctype html><html><head></head><body></body></html>');
@@ -1481,25 +1482,21 @@
     if (notifyBackground) {
       chrome.runtime.sendMessage({ type: "tts.cleanup", payload: {} }).catch();
     }
-    if (origHTML) {
-      document.open();
-      document.write(origHTML);
-      document.close();
-      origHTML = null;
-    } else {
-      overlay?.remove();
+    if (nuked) {
+      window.location.reload();
+      return;
     }
+    overlay?.remove();
     document.removeEventListener("keyup", onKey, true);
     document.removeEventListener("copy", onCopy, true);
-    // outside.forEach(n => { try { n.removeAttribute("inert"); } catch(_){} });
     document.documentElement.classList.remove("rv-active");
+    document.getElementById('rv-style-link')?.remove();
     tts.prepared = false;
     tts.texts = [];
     tts.index = 0;
     tts.meta = [];
     tts.server = null;
     tts.highlightSpan = null;
-    clearFind();
   }
 
   function onKey(e) {

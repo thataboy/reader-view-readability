@@ -12,7 +12,8 @@
     SUPERTONIC: 3,
     POCKET: 4,
     CANDLE: 5,
-    MLX: 6,
+    PONX: 6,
+    CPP: 7,
   });
 
   const SERVERS = new Map([
@@ -40,8 +41,12 @@
       { name: "Candle", active: true, chunk_size: [80, 350], pause: 0 },
     ],
     [
-      Server.MLX,
-      { name: "P-mlx", active: false, chunk_size: [80, 350], pause: 0 },
+      Server.PONX,
+      { name: "Onyx", active: true, chunk_size: [80, 350], pause: 0 },
+    ],
+    [
+      Server.CPP,
+      { name: "C++", active: true, chunk_size: [80, 300], pause: 0 },
     ],
   ]);
 
@@ -54,6 +59,10 @@
   let surface = null; // inner focusable div of overrlay
   let contentHost = null; // div where main content resides
   const currentPageUrl = window.location.href.split(/[?#]/)[0]; // Use URL without query/hash
+  const readingProgressUrl = (() => {
+    const m = currentPageUrl.match(/^https?:\/\/(192\.|127\.|localhost)(.*)?:\d+\/(.+)$/);
+    return m ? m[3] : currentPageUrl;
+  })();
   const _lang = (document.documentElement.lang || "en")
     .substring(0, 2)
     .toLowerCase();
@@ -231,9 +240,9 @@
     if (!prefs.readingProgress) prefs.readingProgress = {};
 
     if (tts.index == 0 || tts.index + 1 >= tts.texts.length)
-      delete prefs.readingProgress[currentPageUrl];
+      delete prefs.readingProgress[readingProgressUrl];
     else
-      prefs.readingProgress[currentPageUrl] = {
+      prefs.readingProgress[readingProgressUrl] = {
         index: tts.index,
         segments: tts.texts.length,
         timestamp: Date.now(),
@@ -304,9 +313,9 @@
         return;
       }
       if (msg.type === "tts.error") {
-        console.log(p.error);
-        stopPlayback(false);
-        setStatus(`TTS error: ${p.error}`);
+        const continuePlay = p.error.contains("BodyStreamBuffer was aborted");
+        stopPlayback(continuePlay);
+        if (continuePlay) console.log(p.error); else setStatus(`TTS error: ${p.error}`);
         return;
       }
     });
@@ -748,8 +757,9 @@
 
   // jump to next/prev
   function rvJumpTo(i) {
-    if (!rvFind.matches.length) return;
-    rvFind.index = (i + rvFind.matches.length) % rvFind.matches.length;
+    const n = rvFind.matches.length;
+    if (!n) return;
+    rvFind.index = (i >= 0) ? (i + n) % n : n -1;
 
     rvFind.overlaySpans.forEach(s => s.classList.remove("active"));
 
@@ -860,6 +870,7 @@
     "Jr",
     "St",
     "Bros",
+    "No",
     "V",
     "v",
     "Fig",
@@ -1132,6 +1143,7 @@
       '[class*="hidden"]',
       '[class*="restricted"]',
       '[class*="author-box"]',
+      '[class*="_info"]',
       '[class*="share"]',
     ];
     PER_SITE_REMOVE = [
@@ -1236,6 +1248,18 @@
 
     preprocessDoc(cloned);
 
+    // readability.js removes links it thinks are extraneous.
+    // Unfortunately, calibre books use <a href="#....">Chapter Title</a>
+    // This hack makes links not links and tricks readability.js into keeping them
+    if (currentPageUrl.includes("/books/")) {
+      const links = cloned.querySelectorAll('a');
+      links.forEach(link => {
+        // Take all the children of the link and move them to the link's position
+        // The spread operator (...) ensures all child nodes are preserved
+        link.replaceWith(...link.childNodes);
+      });
+    }
+
     const options = {
       classesToPreserve: [/header|caption|author/],
     };
@@ -1248,7 +1272,7 @@
     }
     byline.textContent = article.byline;
 
-    const savedProgress = prefs.readingProgress[currentPageUrl];
+    const savedProgress = prefs.readingProgress[readingProgressUrl];
     tts.index = savedProgress?.index || 0;
 
     // when navigating away, the overlay is not destroyed,
@@ -1500,8 +1524,7 @@
   }
 
   function onKey(e) {
-    const accel = e.metaKey || e.ctrlKey;
-    if (accel && e.key.toLowerCase() === "a") {
+    if (e.ctrlKey && e.key === "a") {
       e.preventDefault();
       selectTarget();
       return;

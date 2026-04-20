@@ -56,6 +56,11 @@
     border: 1px solid var(--rv-border);
     padding: 6px 6px;
 }
+#rv-content img,
+#rv-content svg {
+    max-width: 98% !important;
+    height: auto !important;
+}
 :root {
     --rv-bg: #0b0d10;
     --rv-fg: #e6e8eb;

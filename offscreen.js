@@ -20,7 +20,8 @@ const Server = Object.freeze({
   SUPERTONIC: 3,
   POCKET: 4,
   CANDLE: 5,
-  MLX: 6,
+  PONX: 6,
+  CPP: 7,
 });
 
 const SERVER_IP = navigator.userAgent.includes("Mac OS")
@@ -42,31 +43,17 @@ const SERVERS = new Map([
   ],
   [
     Server.CANDLE,
-    {
-      port: 9900,
-      min_len: 1,
-      sanitizer: sanitizePocket,
-      streamable: true,
-    },
+    { port: 9900, min_len: 1, sanitizer: sanitizePocket, streamable: true, },
   ],
   [
-    Server.MLX,
-    {
-      port: 9700,
-      min_len: 1,
-      sanitizer: sanitizePocket,
-      streamable: false,
-    },
+    Server.PONX,
+    { port: 9500, min_len: 1, sanitizer: sanitizePocket, streamable: true, },
+  ],
+  [
+    Server.CPP,
+    { port: 9000, min_len: 1, sanitizer: sanitizeCPP, streamable: true, },
   ],
 ]);
-
-// function sanitizeCommon(text) {
-//   return String(text || "")
-//     .replace(/\s+/g, " ")
-//     .replace(/[\u2018\u2019]/g, "'")
-//     .replace(/[\u201C\u201D]/g, '"')
-//     .trim();
-// }
 
 // fix a bunch of weird quirks with VoxCPM
 function sanitizeVox(text) {
@@ -151,6 +138,22 @@ function sanitizePocket(text) {
       .trim()
       // don't end sentence with , ;
       .replace(/[,;]+$/, "")
+  );
+}
+
+function sanitizeCPP(text) {
+  return (
+    text
+      .replace(/(\d)\.(\d)/g, "$1 point $2")
+      .replace(/([a-z]{2,3})\.([a-z]{2,3}\d)/g, "$1 dot $2")
+      .replace(/\$\s?([\d,]+(?:\.\d{2})?)/g, "$1 dollars")
+      .replace(/No\.\s*(\d+)/g, "number $1")
+      // drop . from middle initial
+      .replace(/\s([A-Z])\.\s/g, " $1 ")
+      // replace V.I.P. with VIP
+      .replace(/([A-Z]\.){3,}/g, (match) => {
+        return match.replace(/\./g, "");
+      })
   );
 }
 
@@ -428,7 +431,7 @@ class StreamingPlayer {
     this.didStartPlayback = true;
   }
 
-  async finish({ timeoutMs = 15000 } = {}) {
+  async finish() {
     if (!this.sampleRate) return;
 
     this.minBufferSize = 2;
@@ -437,9 +440,7 @@ class StreamingPlayer {
     if (!this._lastSrc) return;
 
     await new Promise((resolve) => {
-      const t = setTimeout(resolve, timeoutMs);
       this._lastSrc.onended = () => {
-        clearTimeout(t);
         resolve();
       };
     });
@@ -567,6 +568,7 @@ function cacheKey(st, index) {
 }
 
 function isTooShortForServer(cfg, body) {
+  if (!/[a-zA-Z0-9]/.test(body.text)) return true;
   const minLen = cfg.min_len ?? 0;
   const textLen = (body.text ?? "").length;
   return minLen > 0 && textLen < minLen;
